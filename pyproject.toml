@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mimiji"
+dynamic = ["version"]
+description = "Windows desktop app that makes Korean subtitles from Japanese video: local faster-whisper transcription, translation through the Codex or Claude Code CLI"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+  "av>=14",
+  "ctranslate2>=4.6",
+  "faster-whisper>=1.2,<1.3",
+  "onnxruntime>=1.17",
+  "PySide6>=6.10,<6.11",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.17"]
+packaging = ["pyinstaller>=6.16"]
+diarization = ["pyannote.audio>=4,<5"]
+
+[project.scripts]
+mimiji = "local_subtitle_tool.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "local_subtitle_tool._version.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+local_subtitle_tool = [
+    "qml/*.qml",
+    "qml/qmldir",
+    "qml/components/*.qml",
+    "assets/*.svg",
+    "assets/*.ico",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.subtitle_job/
+.ruff_cache/
+# Job data and subtitles from local test runs (never commit media-derived files)
+*_merged_raw_ja.json
+*.srt
+*_review.tsv
+*_omitted_candidates.tsv
+*_작업결과보고.md
+/*-*/

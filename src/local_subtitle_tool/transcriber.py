@@ -185,6 +185,7 @@ def _settings_fingerprint(
     legacy: bool = False,
     rescue_decode: object = _CURRENT_RESCUE_DECODE,
     language: str = "ja",
+    hotwords: str = "",
 ) -> str:
     """Transcription policy fingerprint; ``legacy`` gives the 0.8.7 policy (no rescue)."""
 
@@ -214,6 +215,8 @@ def _settings_fingerprint(
             "overlap_ratio": RESCUE_OVERLAP_RATIO,
         }
         payload["repeat_collapse"] = "phrase-run-4-to-3-v1"
+        if hotwords:
+            payload["hotwords"] = hotwords
         if rescue_decode is _CURRENT_RESCUE_DECODE:
             payload["rescue_decode"] = f"batched-{RESCUE_BATCH_SIZE}-whole-window-v1"
     text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -779,7 +782,9 @@ def transcribe(
         if not windows:
             raise RuntimeError("전사할 오디오 구간이 없습니다.")
         source_fingerprint = _source_fingerprint(config, duration)
-        settings_fingerprint = _settings_fingerprint(language=config.direction.source)
+        settings_fingerprint = _settings_fingerprint(
+            language=config.direction.source, hotwords=", ".join(config.terms)
+        )
 
         # Reuse a raw transcription only when it was produced from this exact source
         # file with the current transcription policy.
@@ -810,7 +815,11 @@ def transcribe(
                         source_fingerprint=source_fingerprint,
                         settings_fingerprint=accepted,
                     )
-                    for accepted in _accepted_raw_fingerprints(config.direction.source)
+                    for accepted in (
+                        _accepted_raw_fingerprints(config.direction.source)
+                        if not config.terms
+                        else {settings_fingerprint}
+                    )
                 ):
                     # A finished transcription from the previous policy is kept: making
                     # a new one changes every raw_id and discards the translation.
@@ -920,6 +929,7 @@ def transcribe(
                     _group_audio(audio, window, group),
                     language=config.direction.source,
                     task="transcribe",
+                    **({"hotwords": ", ".join(config.terms)} if config.terms else {}),
                     **options,
                 )
                 decoded = []
@@ -947,6 +957,7 @@ def transcribe(
                     audio,
                     language=config.direction.source,
                     task="transcribe",
+                    **({"hotwords": ", ".join(config.terms)} if config.terms else {}),
                     clip_timestamps=[
                         {"start": window.start, "end": window.end} for window in rescue_windows
                     ],

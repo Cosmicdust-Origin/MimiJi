@@ -12,9 +12,9 @@ Item {
         PageHeader {
             Layout.fillWidth: true
             eyebrow: bridge.code
-            title: "작업이 끝났습니다"
-            description: "결과 파일을 저장하고 자동 검사를 마쳤습니다."
-            AppButton { text: "새 작업"; onClicked: bridge.newJob() }
+            title: bridge.tr("작업이 끝났습니다", bridge.uiLanguage)
+            description: bridge.tr("결과 파일을 저장하고 자동 검사를 마쳤습니다.", bridge.uiLanguage)
+            AppButton { text: bridge.tr("새 작업", bridge.uiLanguage); onClicked: bridge.newJob() }
         }
 
         RowLayout {
@@ -28,7 +28,7 @@ Item {
                 Layout.rightMargin: 30
                 Layout.topMargin: 22
                 spacing: 0
-                Text { text: "실제 작업 시간"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 12 }
+                Text { text: bridge.tr("실제 작업 시간", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 12 }
                 Text { text: bridge.elapsedText; color: Theme.ink; font.family: Theme.family; font.pixelSize: 29; font.weight: Font.Medium; Layout.topMargin: 7 }
 
                 Column {
@@ -57,8 +57,8 @@ Item {
                 Layout.leftMargin: 28
                 Layout.topMargin: 22
                 spacing: 0
-                Text { text: "결과 파일"; color: Theme.ink; font.family: Theme.family; font.pixelSize: 15; font.weight: Font.DemiBold }
-                Text { text: "파일 이름을 누르면 기본 프로그램으로 엽니다."; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 12; Layout.topMargin: 4 }
+                Text { text: bridge.tr("결과 파일", bridge.uiLanguage); color: Theme.ink; font.family: Theme.family; font.pixelSize: 15; font.weight: Font.DemiBold }
+                Text { text: bridge.tr("파일 이름을 누르면 기본 프로그램으로 엽니다.", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 12; Layout.topMargin: 4 }
 
                 Column {
                     Layout.fillWidth: true
@@ -82,9 +82,9 @@ Item {
 
         FooterBar {
             Layout.fillWidth: true
-            title: "SRT 구조와 번역 품질 검사를 완료했습니다."
-            detail: "결과 보고서에서 CUDA 사용 여부와 검증 수치를 확인할 수 있습니다."
-            AppButton { text: "출력 폴더 열기"; kind: "primary"; onClicked: bridge.openOutputFolder() }
+            title: bridge.tr("SRT 구조와 번역 품질 검사를 완료했습니다.", bridge.uiLanguage)
+            detail: bridge.tr("결과 보고서에서 CUDA 사용 여부와 검증 수치를 확인할 수 있습니다.", bridge.uiLanguage)
+            AppButton { text: bridge.tr("출력 폴더 열기", bridge.uiLanguage); kind: "primary"; onClicked: bridge.openOutputFolder() }
         }
     }
 }

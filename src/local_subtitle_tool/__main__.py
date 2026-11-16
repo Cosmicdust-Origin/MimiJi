@@ -28,6 +28,11 @@ def _add_job_arguments(parser: argparse.ArgumentParser) -> None:
         help="번역 모델 사고 수준",
     )
     parser.add_argument(
+        "--terms",
+        default="",
+        help="용어·고유명사 힌트(쉼표로 구분). 전사 힌트 단어와 번역 용어집으로 씁니다.",
+    )
+    parser.add_argument(
         "--language-pair",
         choices=["ja-ko", "ko-ja"],
         default="ja-ko",
@@ -70,6 +75,7 @@ def _config_from_args(args: argparse.Namespace) -> JobConfig:
         reasoning_effort=args.reasoning_effort,
         speed_mode=args.speed_mode,
         language_pair=args.language_pair,
+        term_hints=args.terms,
         batch_size=args.batch_size,
         accelerator=args.accelerator,
         device_index=args.device_index,

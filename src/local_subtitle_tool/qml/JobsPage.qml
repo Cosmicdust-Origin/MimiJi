@@ -15,10 +15,10 @@ Item {
         PageHeader {
             Layout.fillWidth: true
             eyebrow: "Saved jobs"
-            title: "이전 작업"
-            description: "완료되지 않은 작업은 마지막 안전 지점부터 이어집니다."
+            title: bridge.tr("이전 작업", bridge.uiLanguage)
+            description: bridge.tr("완료되지 않은 작업은 마지막 안전 지점부터 이어집니다.", bridge.uiLanguage)
             AppButton {
-                text: "새 작업"
+                text: bridge.tr("새 작업", bridge.uiLanguage)
                 onClicked: bridge.newJob()
             }
         }
@@ -75,16 +75,16 @@ Item {
                                 Layout.preferredWidth: 130
                                 spacing: 4
                                 Text { text: modelData.updated_text; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
-                                Text { text: "누적 " + modelData.elapsed_text; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
+                                Text { text: bridge.tr("누적 ", bridge.uiLanguage) + modelData.elapsed_text; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
                             }
                             AppButton {
-                                text: "목록 제거"
+                                text: bridge.tr("목록 제거", bridge.uiLanguage)
                                 kind: "quiet"
                                 enabled: !bridge.busy
                                 onClicked: bridge.removeJob(modelData.job_id)
                             }
                             AppButton {
-                                text: "이어서 진행"
+                                text: bridge.tr("이어서 진행", bridge.uiLanguage)
                                 kind: index === 0 ? "primary" : "default"
                                 enabled: !bridge.busy && !modelData.registry_error
                                 onClicked: bridge.resumeJob(modelData.job_id)
@@ -97,7 +97,7 @@ Item {
                     visible: bridge.jobs.length === 0
                     width: parent.width
                     topPadding: 36
-                    text: "이어갈 미완료 작업이 없습니다."
+                    text: bridge.tr("이어갈 미완료 작업이 없습니다.", bridge.uiLanguage)
                     color: Theme.inkFaint
                     font.family: Theme.family
                     font.pixelSize: 14
@@ -108,8 +108,8 @@ Item {
 
         FooterBar {
             Layout.fillWidth: true
-            title: "작업 파일은 원래 출력 폴더에 유지됩니다."
-            detail: "목록에서 제거해도 영상과 결과 파일을 자동으로 삭제하지 않습니다."
+            title: bridge.tr("작업 파일은 원래 출력 폴더에 유지됩니다.", bridge.uiLanguage)
+            detail: bridge.tr("목록에서 제거해도 영상과 결과 파일을 자동으로 삭제하지 않습니다.", bridge.uiLanguage)
         }
     }
 
@@ -130,7 +130,7 @@ Item {
             spacing: 14
             Text {
                 Layout.fillWidth: true
-                text: "번역 설정을 확인합니다"
+                text: bridge.tr("번역 설정을 확인합니다", bridge.uiLanguage)
                 color: Theme.ink
                 font.family: Theme.family
                 font.pixelSize: 19
@@ -146,7 +146,7 @@ Item {
             }
             Text {
                 Layout.fillWidth: true
-                text: "현재 설정  " + bridge.resumeOriginalProfileText
+                text: bridge.tr("현재 설정  ", bridge.uiLanguage) + bridge.resumeOriginalProfileText
                 color: Theme.ink
                 font.family: Theme.family
                 font.pixelSize: 13
@@ -156,16 +156,16 @@ Item {
                 Layout.topMargin: 8
                 Item { Layout.fillWidth: true }
                 AppButton {
-                    text: "취소"
+                    text: bridge.tr("취소", bridge.uiLanguage)
                     kind: "quiet"
                     onClicked: bridge.cancelResumeChoice()
                 }
                 AppButton {
-                    text: "그대로 이어하기"
+                    text: bridge.tr("그대로 이어하기", bridge.uiLanguage)
                     onClicked: bridge.resumeWithSavedSettings()
                 }
                 AppButton {
-                    text: "설정 바꿔서 이어하기"
+                    text: bridge.tr("설정 바꿔서 이어하기", bridge.uiLanguage)
                     kind: "primary"
                     onClicked: bridge.editResumeTranslationSettings()
                 }
@@ -190,7 +190,7 @@ Item {
             spacing: 14
             Text {
                 Layout.fillWidth: true
-                text: "기존 배치를 검증할 수 없습니다"
+                text: bridge.tr("기존 배치를 검증할 수 없습니다", bridge.uiLanguage)
                 color: Theme.ink
                 font.family: Theme.family
                 font.pixelSize: 19
@@ -198,7 +198,7 @@ Item {
             }
             Text {
                 Layout.fillWidth: true
-                text: bridge.unverifiedBatchText + "\n새 번역 설정으로 해당 배치를 다시 번역할 수 있습니다. 기존 파일은 임의로 재사용하지 않습니다."
+                text: bridge.unverifiedBatchText + bridge.tr("\n새 번역 설정으로 해당 배치를 다시 번역할 수 있습니다. 기존 파일은 임의로 재사용하지 않습니다.", bridge.uiLanguage)
                 color: Theme.inkSoft
                 font.family: Theme.family
                 font.pixelSize: 13
@@ -209,12 +209,12 @@ Item {
                 Layout.topMargin: 8
                 Item { Layout.fillWidth: true }
                 AppButton {
-                    text: "취소"
+                    text: bridge.tr("취소", bridge.uiLanguage)
                     kind: "quiet"
                     onClicked: bridge.cancelUnverifiedBatchChoice()
                 }
                 AppButton {
-                    text: "새 설정으로 다시 번역"
+                    text: bridge.tr("새 설정으로 다시 번역", bridge.uiLanguage)
                     kind: "primary"
                     onClicked: bridge.confirmRetranslateUnverifiedBatches()
                 }

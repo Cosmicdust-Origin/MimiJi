@@ -243,8 +243,12 @@ SYSTEM_INSTRUCTIONS_KO_JA = "\n".join(
         "ko_fix_required_raw_ids에 있는 raw_id는 번역한다면 반드시 ko_fixes에 보정문"
         "(고칠 것이 없으면 원문 그대로)을 먼저 적으십시오. 그 외에는 고친 줄만 적습니다.",
         "4. 단어 치환, 이전 번역 재사용, 일부 단어만 남기기, 말줄임표로 가리기, 요약을 "
-        "금지합니다. ja에 한글을 남기지 마십시오. 고유명사는 일본어 표기(가타카나 등)로 "
-        "옮기십시오.",
+        "금지합니다. ja에 한글을 남기지 마십시오. 사람·지명 같은 고유명사가 확실할 때만 "
+        "일본어 표기(가타카나 등)로 옮기십시오. 문맥에 맞지 않는 낯선 단어는 음성 인식 "
+        "오류일 수 있으니(예: '역모'를 '영모'로 인식) 문맥으로 원래 단어를 추정해 ko_fixes에 "
+        "고친 뒤 그 뜻으로 번역하고, 소리 나는 대로 가타카나로 옮기지 마십시오. 한자어는 "
+        "직역보다 일본어에서 자연스러운 말을 고르고(예: 역모→謀反), 같은 단어는 작품 전체에서 "
+        "같은 말로 옮기십시오.",
         "5. 화자 관계와 높임말을 문맥에서 추론하여 です・ます체와 반말(タメ口), 경어, 호칭"
         "(さん・くん・ちゃん・様 등), 감정의 강도를 일관되게 보존하십시오. "
         "previous_register_summary가 있으면 이어서 따르십시오.",
@@ -262,6 +266,12 @@ SYSTEM_INSTRUCTIONS_KO_JA = "\n".join(
         "11. register_summary에는 이 구간의 화자 관계, 서로의 호칭과 말투(경어·반말)를 "
         "1~3문장으로 요약하십시오. 다음 구간 번역의 일관성에 사용됩니다.",
     ]
+)
+
+GLOSSARY_INSTRUCTIONS = (
+    "12. glossary_terms는 사용자가 알려 준 이 작품의 고유명사와 용어입니다. 원문에 이와 "
+    "비슷하게 들리는 단어가 있으면 음성 인식 오류로 보고 이 표기로 고치십시오. 같은 용어는 "
+    "작품 전체에서 같은 번역어로 옮기십시오."
 )
 
 REVIEW_RETRY_INSTRUCTIONS = "\n".join(
@@ -356,6 +366,7 @@ def _make_prompt(
     previous_review: dict[int, dict[str, Any]] | None = None,
     register_summary: str | None = None,
     direction: str = "ja-ko",
+    terms: list[str] | None = None,
 ) -> str:
     reverse = direction == "ko-ja"
     index_by_id = {int(item["id"]): index for index, item in enumerate(all_segments)}
@@ -379,7 +390,11 @@ def _make_prompt(
     }
     if register_summary:
         payload["previous_register_summary"] = register_summary
+    if terms:
+        payload["glossary_terms"] = terms
     instructions = SYSTEM_INSTRUCTIONS_KO_JA if reverse else SYSTEM_INSTRUCTIONS
+    if terms:
+        instructions += "\n" + GLOSSARY_INSTRUCTIONS
     if previous_review is not None:
         instructions += "\n" + REVIEW_RETRY_INSTRUCTIONS
         payload["previous_review"] = [
@@ -1482,6 +1497,7 @@ def _make_repair_prompt(
     problems: list[str],
     previous_review: dict[int, dict[str, Any]] | None = None,
     direction: str = "ja-ko",
+    terms: list[str] | None = None,
 ) -> str:
     base = _make_prompt(
         code=code,
@@ -1490,6 +1506,7 @@ def _make_repair_prompt(
         context_size=context_size,
         previous_review=previous_review,
         direction=direction,
+        terms=terms,
     )
     instructions = REPAIR_INSTRUCTIONS.replace(
         "{problems}", "\n".join(f"- {item}" for item in problems[:20])
@@ -2059,6 +2076,7 @@ def retry_review_item(
     prompt = _make_prompt(
         code=config.code,
         direction=config.language_pair,
+        terms=config.terms,
         all_segments=segments,
         target_ids=[raw_id],
         context_size=max(config.context_size * 5, REVIEW_SINGLE_MIN_CONTEXT),
@@ -2203,6 +2221,7 @@ def _recover_review_items(
             prompt = _make_prompt(
                 code=config.code,
                 direction=config.language_pair,
+                terms=config.terms,
                 all_segments=segments,
                 target_ids=group,
                 context_size=context_size,
@@ -2262,6 +2281,7 @@ def _recover_review_items(
                             _make_repair_prompt(
                                 code=config.code,
                                 direction=config.language_pair,
+                                terms=config.terms,
                                 all_segments=segments,
                                 target_ids=ids,
                                 context_size=size,
@@ -2491,6 +2511,7 @@ def translate(
             prompt = _make_prompt(
                 code=config.code,
                 direction=config.language_pair,
+                terms=config.terms,
                 all_segments=segments,
                 target_ids=expected_ids,
                 context_size=config.context_size,
@@ -2611,6 +2632,7 @@ def translate(
                 _make_prompt(
                     code=config.code,
                     direction=config.language_pair,
+                    terms=config.terms,
                     all_segments=segments,
                     target_ids=expected_ids,
                     context_size=config.context_size,
@@ -2652,6 +2674,7 @@ def translate(
                     repair_prompt=lambda ids, problems: _make_repair_prompt(
                         code=config.code,
                         direction=config.language_pair,
+                        terms=config.terms,
                         all_segments=segments,
                         target_ids=ids,
                         context_size=config.context_size,

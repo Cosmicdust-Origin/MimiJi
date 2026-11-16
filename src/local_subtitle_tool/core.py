@@ -112,6 +112,9 @@ class JobConfig:
     diarization_srt_labels: bool = False
     # "ja-ko" (Japanese audio, Korean subtitles) or "ko-ja"; see languages.py.
     language_pair: str = "ja-ko"
+    # Optional proper nouns and terms ("역모, 도승지, 중전"): Whisper hint words and a
+    # translation glossary so the same word is recognised and translated the same way.
+    term_hints: str = ""
 
     def __post_init__(self) -> None:
         # The work title (historically "code"): used in output file names and reports.
@@ -199,6 +202,7 @@ class JobConfig:
             diarization_device=str(data.get("diarization_device", Accelerator.AUTO)),
             diarization_srt_labels=data.get("diarization_srt_labels", False),
             language_pair=str(data.get("language_pair", "ja-ko")),
+            term_hints=str(data.get("term_hints", "") or ""),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -208,7 +212,13 @@ class JobConfig:
         if data.get("language_pair") == "ja-ko":
             # Keep jobs made before the option existed byte-identical (fingerprints).
             data.pop("language_pair")
+        if not data.get("term_hints"):
+            data.pop("term_hints", None)
         return data
+
+    @property
+    def terms(self) -> list[str]:
+        return parse_terms(self.term_hints)
 
     @property
     def direction(self):
@@ -688,6 +698,17 @@ class JobManifest:
             ),
         }
         atomic_write_json(paths.manifest, data)
+
+
+def parse_terms(text: str) -> list[str]:
+    """Terms separated by commas, semicolons or new lines, duplicates removed."""
+
+    seen: list[str] = []
+    for part in re.split(r"[,，、;；\n]+", text or ""):
+        term = " ".join(part.split())
+        if term and term not in seen:
+            seen.append(term)
+    return seen[:60]
 
 
 _INVALID_FILE_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')

@@ -35,6 +35,8 @@ from .diarization import (
     download_diarization_model,
     inspect_diarization_status,
 )
+from .i18n import UI_LANGUAGES
+from .i18n import translate as translate_ui
 from .installers import (
     install_claude,
     install_codex,
@@ -70,6 +72,14 @@ from .translator import (
 )
 
 _logger = get_logger("bridge")
+# Values that are content (file names, paths, transcript text, model notes), not UI text.
+_UNTRANSLATED_KEYS = frozenset(
+    {
+        "raw_ja", "ja_fixed", "ko", "path", "file_name", "video_path", "output_dir",
+        "code", "job_id", "reason", "time", "size", "url", "provider", "id", "raw_id",
+        "updated_text", "elapsed_text", "kind",
+    }
+)
 
 REASONING_OPTIONS = {
     "codex": ["default", "low", "medium", "high", "xhigh"],
@@ -165,6 +175,7 @@ class AppBridge(QObject):
     reviewChanged = Signal()
     accountsChanged = Signal()
     themeChanged = Signal()
+    languageChanged = Signal()
     notification = Signal(str)
 
     _updateRequested = Signal(dict)
@@ -206,6 +217,7 @@ class AppBridge(QObject):
         self._diagnostic_busy = False
         self._video_path = ""
         self._code = ""
+        self._term_hints = ""
         self._output_dir = ""
         # True while the output folder is the automatic <video folder>/<title>.
         self._output_dir_auto = True
@@ -243,6 +255,9 @@ class AppBridge(QObject):
         )
         self._diarization_busy = False
         self._dark_mode = bool(self._settings.value("ui/dark_mode", True, type=bool))
+        self._ui_language = str(self._settings.value("ui/language", "ko"))
+        if self._ui_language not in UI_LANGUAGES:
+            self._ui_language = "ko"
         self._codex_sessions = bool(
             self._settings.value("translation/codex_sessions", True, type=bool)
         )
@@ -352,6 +367,9 @@ class AppBridge(QObject):
 
     @Property(str, notify=formChanged)
     def fileMeta(self) -> str:
+        return self._t(self._raw_fileMeta())
+
+    def _raw_fileMeta(self) -> str:
         return self._file_meta
 
     @Property(str, notify=formChanged)
@@ -400,6 +418,9 @@ class AppBridge(QObject):
 
     @Property(list, notify=formChanged)
     def reasoningLabels(self) -> list[str]:
+        return self._t_list(self._raw_reasoningLabels())
+
+    def _raw_reasoningLabels(self) -> list[str]:
         """Display labels for reasoningOptions (same order), marking the recommended one."""
 
         return _recommended_labels(
@@ -408,11 +429,76 @@ class AppBridge(QObject):
 
     @Property(list, notify=formChanged)
     def modelLabels(self) -> list[str]:
+        return self._t_list(self._raw_modelLabels())
+
+    def _raw_modelLabels(self) -> list[str]:
         return _recommended_labels(self.modelOptions, RECOMMENDED_MODEL.get(self._provider))
 
     @Property(list, notify=formChanged)
     def speedOptions(self) -> list[str]:
         return list(SPEED_OPTIONS)
+
+    # --- screen language ------------------------------------------------------------------
+
+    @Property(str, notify=languageChanged)
+    def uiLanguage(self) -> str:
+        return self._ui_language
+
+    @uiLanguage.setter
+    def uiLanguage(self, value: str) -> None:
+        if value not in UI_LANGUAGES or value == self._ui_language:
+            return
+        self._ui_language = value
+        self._settings.setValue("ui/language", value)
+        self._settings.sync()
+        self.languageChanged.emit()
+        for signal in (
+            self.stateChanged,
+            self.formChanged,
+            self.jobsChanged,
+            self.diagnosticsChanged,
+            self.logsChanged,
+            self.resultsChanged,
+            self.reviewChanged,
+            self.accountsChanged,
+        ):
+            signal.emit()
+
+    @Slot(str, str, result=str)
+    def tr(self, text: str, language: str) -> str:
+        return translate_ui(text, language)
+
+    def _t(self, text: Any) -> Any:
+        return translate_ui(text, self._ui_language) if isinstance(text, str) else text
+
+    def _t_list(self, values: list[Any]) -> list[Any]:
+        if self._ui_language == "ko":
+            return values
+        translated: list[Any] = []
+        for value in values:
+            if isinstance(value, dict):
+                translated.append(
+                    {
+                        key: item if key in _UNTRANSLATED_KEYS else self._t(item)
+                        for key, item in value.items()
+                    }
+                )
+            else:
+                translated.append(self._t(value))
+        return translated
+
+    def _notify(self, text: str) -> None:
+        self.notification.emit(self._t(text))
+
+    @Property(str, notify=formChanged)
+    def termHints(self) -> str:
+        return self._term_hints
+
+    @termHints.setter
+    def termHints(self, value: str) -> None:
+        if value != self._term_hints:
+            self._term_hints = value
+            self.formChanged.emit()
 
     @Property(str, notify=formChanged)
     def languagePair(self) -> str:
@@ -429,8 +515,11 @@ class AppBridge(QObject):
     def languagePairOptions(self) -> list[str]:
         return list(DIRECTIONS)
 
-    @Property(list, constant=True)
+    @Property(list, notify=languageChanged)
     def languagePairLabels(self) -> list[str]:
+        return self._t_list(self._raw_languagePairLabels())
+
+    def _raw_languagePairLabels(self) -> list[str]:
         return [item.label for item in DIRECTIONS.values()]
 
     def _shown_direction(self):
@@ -439,14 +528,23 @@ class AppBridge(QObject):
 
     @Property(str, notify=reviewChanged)
     def sourceLanguageName(self) -> str:
+        return self._t(self._raw_sourceLanguageName())
+
+    def _raw_sourceLanguageName(self) -> str:
         return self._shown_direction().source_name
 
     @Property(str, notify=reviewChanged)
     def targetLanguageName(self) -> str:
+        return self._t(self._raw_targetLanguageName())
+
+    def _raw_targetLanguageName(self) -> str:
         return self._shown_direction().target_name
 
     @Property(list, notify=formChanged)
     def speedLabels(self) -> list[str]:
+        return self._t_list(self._raw_speedLabels())
+
+    def _raw_speedLabels(self) -> list[str]:
         return _recommended_labels(list(SPEED_OPTIONS), RECOMMENDED_SPEED.get(self._provider))
 
     @Property(bool, constant=True)
@@ -459,6 +557,9 @@ class AppBridge(QObject):
 
     @Property(str, notify=diagnosticsChanged)
     def modelDownloadSize(self) -> str:
+        return self._t(self._raw_modelDownloadSize())
+
+    def _raw_modelDownloadSize(self) -> str:
         return self._model_download_size
 
     @Property(str, notify=diagnosticsChanged)
@@ -485,14 +586,23 @@ class AppBridge(QObject):
 
     @Property(str, notify=stateChanged)
     def requestPhase(self) -> str:
+        return self._t(self._raw_requestPhase())
+
+    def _raw_requestPhase(self) -> str:
         return self._request_phase
 
     @Property(str, notify=stateChanged)
     def requestElapsedText(self) -> str:
+        return self._t(self._raw_requestElapsedText())
+
+    def _raw_requestElapsedText(self) -> str:
         return self._request_elapsed_text
 
     @Property(str, notify=stateChanged)
     def firstEventText(self) -> str:
+        return self._t(self._raw_firstEventText())
+
+    def _raw_firstEventText(self) -> str:
         if self._first_event_seconds is None:
             return "대기 중" if self._request_started is not None else "—"
         return f"{self._first_event_seconds:.1f}초"
@@ -525,6 +635,9 @@ class AppBridge(QObject):
 
     @Property(list, notify=accountsChanged)
     def accounts(self) -> list[dict[str, Any]]:
+        return self._t_list(self._raw_accounts())
+
+    def _raw_accounts(self) -> list[dict[str, Any]]:
         return [self._accounts["codex"], self._accounts["claude"]]
 
     @Property(bool, notify=accountsChanged)
@@ -533,6 +646,9 @@ class AppBridge(QObject):
 
     @Property(str, notify=accountsChanged)
     def providerAccountText(self) -> str:
+        return self._t(self._raw_providerAccountText())
+
+    def _raw_providerAccountText(self) -> str:
         return account_line(self._accounts[self._provider])
 
     @Property(bool, notify=accountsChanged)
@@ -566,9 +682,9 @@ class AppBridge(QObject):
         try:
             get_provider(provider).launch_login()
         except Exception as exc:
-            self.notification.emit(str(exc))
+            self._notify(str(exc))
             return
-        self.notification.emit(
+        self._notify(
             "공식 로그인 창을 열었습니다. 로그인을 마치고 앱으로 돌아오면 상태를 다시 확인합니다."
         )
 
@@ -593,6 +709,9 @@ class AppBridge(QObject):
 
     @Property(list, notify=reviewChanged)
     def reviewItems(self) -> list[dict[str, Any]]:
+        return self._t_list(self._raw_reviewItems())
+
+    def _raw_reviewItems(self) -> list[dict[str, Any]]:
         return self._review_items
 
     @Property(bool, notify=reviewChanged)
@@ -720,6 +839,9 @@ class AppBridge(QObject):
 
     @Property(str, notify=formChanged)
     def diarizationStatus(self) -> str:
+        return self._t(self._raw_diarizationStatus())
+
+    def _raw_diarizationStatus(self) -> str:
         return self._diarization_status
 
     @Property(bool, notify=formChanged)
@@ -735,10 +857,16 @@ class AppBridge(QObject):
 
     @Property(str, notify=stateChanged)
     def taskTitle(self) -> str:
+        return self._t(self._raw_taskTitle())
+
+    def _raw_taskTitle(self) -> str:
         return self._task_title
 
     @Property(str, notify=stateChanged)
     def taskDetail(self) -> str:
+        return self._t(self._raw_taskDetail())
+
+    def _raw_taskDetail(self) -> str:
         return self._task_detail
 
     @Property(int, notify=stateChanged)
@@ -755,26 +883,44 @@ class AppBridge(QObject):
 
     @Property(str, notify=stateChanged)
     def elapsedText(self) -> str:
+        return self._t(self._raw_elapsedText())
+
+    def _raw_elapsedText(self) -> str:
         return self._elapsed_text
 
     @Property(str, notify=stateChanged)
     def etaText(self) -> str:
+        return self._t(self._raw_etaText())
+
+    def _raw_etaText(self) -> str:
         return self._eta_text
 
     @Property(str, notify=stateChanged)
     def lastSavedText(self) -> str:
+        return self._t(self._raw_lastSavedText())
+
+    def _raw_lastSavedText(self) -> str:
         return self._last_saved_text
 
     @Property(str, notify=stateChanged)
     def lastError(self) -> str:
+        return self._t(self._raw_lastError())
+
+    def _raw_lastError(self) -> str:
         return self._last_error
 
     @Property(str, notify=stateChanged)
     def systemSummary(self) -> str:
+        return self._t(self._raw_systemSummary())
+
+    def _raw_systemSummary(self) -> str:
         return self._system_summary
 
     @Property(str, notify=stateChanged)
     def contextLabel(self) -> str:
+        return self._t(self._raw_contextLabel())
+
+    def _raw_contextLabel(self) -> str:
         labels = {
             "home": "새 자막 작업",
             "running": f"{self._code or '작업'} · 실행 중",
@@ -788,6 +934,9 @@ class AppBridge(QObject):
 
     @Property(list, notify=jobsChanged)
     def jobs(self) -> list[dict[str, Any]]:
+        return self._t_list(self._raw_jobs())
+
+    def _raw_jobs(self) -> list[dict[str, Any]]:
         return self._jobs
 
     @Property(bool, notify=jobsChanged)
@@ -796,6 +945,9 @@ class AppBridge(QObject):
 
     @Property(str, notify=jobsChanged)
     def resumeOriginalProfileText(self) -> str:
+        return self._t(self._raw_resumeOriginalProfileText())
+
+    def _raw_resumeOriginalProfileText(self) -> str:
         config = self._resume_original_config
         if config is None:
             return ""
@@ -806,6 +958,9 @@ class AppBridge(QObject):
 
     @Property(str, notify=jobsChanged)
     def resumeChoiceText(self) -> str:
+        return self._t(self._raw_resumeChoiceText())
+
+    def _raw_resumeChoiceText(self) -> str:
         if self._resume_choice_blocked:
             return (
                 "사용량 한도 또는 로그인 문제로 번역이 멈췄습니다. 완료된 배치는 유지하고 "
@@ -826,19 +981,31 @@ class AppBridge(QObject):
 
     @Property(str, notify=jobsChanged)
     def unverifiedBatchText(self) -> str:
+        return self._t(self._raw_unverifiedBatchText())
+
+    def _raw_unverifiedBatchText(self) -> str:
         numbers = ", ".join(str(index + 1) for index in self._unverified_batch_indexes)
         return f"검증할 수 없는 기존 번역 배치: {numbers}" if numbers else ""
 
     @Property(list, notify=diagnosticsChanged)
     def diagnosticRows(self) -> list[dict[str, Any]]:
+        return self._t_list(self._raw_diagnosticRows())
+
+    def _raw_diagnosticRows(self) -> list[dict[str, Any]]:
         return self._diagnostic_rows
 
     @Property(str, notify=diagnosticsChanged)
     def diagnosticSummary(self) -> str:
+        return self._t(self._raw_diagnosticSummary())
+
+    def _raw_diagnosticSummary(self) -> str:
         return self._diagnostic_summary
 
     @Property(list, notify=logsChanged)
     def logs(self) -> list[dict[str, str]]:
+        return self._t_list(self._raw_logs())
+
+    def _raw_logs(self) -> list[dict[str, str]]:
         return self._logs
 
     @Property(list, notify=resultsChanged)
@@ -847,6 +1014,9 @@ class AppBridge(QObject):
 
     @Property(list, notify=resultsChanged)
     def resultMetrics(self) -> list[dict[str, str]]:
+        return self._t_list(self._raw_resultMetrics())
+
+    def _raw_resultMetrics(self) -> list[dict[str, str]]:
         return self._result_metrics
 
     @Slot(str)
@@ -887,9 +1057,9 @@ class AppBridge(QObject):
     def chooseVideo(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
             None,
-            "입력 영상 선택",
+            self._t("입력 영상 선택"),
             str(Path(self._video_path).parent if self._video_path else Path.home()),
-            "영상 파일 (*.mp4 *.mkv *.mov *.avi *.wmv);;모든 파일 (*.*)",
+            self._t("영상 파일 (*.mp4 *.mkv *.mov *.avi *.wmv);;모든 파일 (*.*)"),
         )
         if selected:
             self._set_video_path(selected)
@@ -904,7 +1074,7 @@ class AppBridge(QObject):
     def chooseOutput(self) -> None:
         selected = QFileDialog.getExistingDirectory(
             None,
-            "출력 폴더 선택",
+            self._t("출력 폴더 선택"),
             self._output_dir or str(Path.home()),
         )
         if selected:
@@ -949,6 +1119,7 @@ class AppBridge(QObject):
             reasoning_effort=self._reasoning,
             speed_mode=self._speed_mode,
             language_pair=self._language_pair,
+            term_hints=self._term_hints.strip(),
             accelerator=self._accelerator,
             compute_type=compute_type,
             cpu_threads=self._cpu_threads or None,
@@ -966,7 +1137,7 @@ class AppBridge(QObject):
         try:
             config = self.buildConfig()
         except ValueError as exc:
-            self.notification.emit(str(exc))
+            self._notify(str(exc))
             return
         self._start_job(config, resume=False)
 
@@ -1180,7 +1351,7 @@ class AppBridge(QObject):
             except Exception as exc:
                 _logger.exception("검토 항목을 읽지 못했습니다.")
                 self._review_items = []
-                self.notification.emit(f"검토 항목을 읽을 수 없습니다: {exc}")
+                self._notify(f"검토 항목을 읽을 수 없습니다: {exc}")
         self.reviewChanged.emit()
 
     @Slot(int)
@@ -1209,9 +1380,9 @@ class AppBridge(QObject):
         try:
             save_manual_translation(config, int(raw_id), ja_fixed, ko)
         except (OSError, ValueError) as exc:
-            self.notification.emit(str(exc))
+            self._notify(str(exc))
             return False
-        self.notification.emit(f"raw_id {raw_id}의 직접 입력을 저장했습니다.")
+        self._notify(f"raw_id {raw_id}의 직접 입력을 저장했습니다.")
         self.loadReviewItems()
         return True
 
@@ -1222,10 +1393,10 @@ class AppBridge(QObject):
         try:
             message = action(config)
         except (OSError, ValueError) as exc:
-            self.notification.emit(str(exc))
+            self._notify(str(exc))
             return False
         if message:
-            self.notification.emit(message)
+            self._notify(message)
         self.loadReviewItems()
         return True
 
@@ -1292,7 +1463,7 @@ class AppBridge(QObject):
         if config is None or self._busy or self._review_busy:
             return
         if self.reviewUnresolvedCount:
-            self.notification.emit(
+            self._notify(
                 "해결되지 않은 항목이 남아 있습니다. 다시 번역하거나 직접 입력하십시오."
             )
             return
@@ -1326,7 +1497,7 @@ class AppBridge(QObject):
             self._jobs = [self._job_view(item) for item in records]
         except Exception as exc:
             self._jobs = []
-            self.notification.emit(f"작업 목록을 읽을 수 없습니다: {exc}")
+            self._notify(f"작업 목록을 읽을 수 없습니다: {exc}")
         self.jobsChanged.emit()
 
     def _job_view(self, record: JobRecord) -> dict[str, Any]:
@@ -1355,7 +1526,7 @@ class AppBridge(QObject):
             inspection = self._registry.inspect_resume(job_id, check_environment=False)
             if not inspection.can_resume:
                 problems = [item.message for item in inspection.checks if not item.ok]
-                self.notification.emit(problems[0] if problems else "작업을 재개할 수 없습니다.")
+                self._notify(problems[0] if problems else "작업을 재개할 수 없습니다.")
                 return
             config = inspection.job.job_config()
             block_kind = _translation_block_kind(config)
@@ -1375,10 +1546,10 @@ class AppBridge(QObject):
             inspection = self._registry.inspect_resume(job_id)
             if not inspection.can_resume:
                 problems = [item.message for item in inspection.checks if not item.ok]
-                self.notification.emit(problems[0] if problems else "작업을 재개할 수 없습니다.")
+                self._notify(problems[0] if problems else "작업을 재개할 수 없습니다.")
                 return
         except Exception as exc:
-            self.notification.emit(f"작업을 재개할 수 없습니다: {exc}")
+            self._notify(f"작업을 재개할 수 없습니다: {exc}")
             return
         # Every resume offers keeping or changing the translation settings.
         self._resume_original_config = config
@@ -1434,7 +1605,7 @@ class AppBridge(QObject):
         try:
             config = self.buildConfig()
         except ValueError as exc:
-            self.notification.emit(str(exc))
+            self._notify(str(exc))
             return
         old_profile = (
             previous.provider,
@@ -1449,7 +1620,7 @@ class AppBridge(QObject):
             config.speed_mode,
         )
         if old_profile == new_profile:
-            self.notification.emit("번역 설정이 바뀌지 않아 기존 설정으로 이어서 진행합니다.")
+            self._notify("번역 설정이 바뀌지 않아 기존 설정으로 이어서 진행합니다.")
             self.resumeWithSavedSettings()
             return
 
@@ -1493,7 +1664,7 @@ class AppBridge(QObject):
             self._registry.remove(job_id)
             self.refreshJobs()
         except Exception as exc:
-            self.notification.emit(f"목록에서 제거할 수 없습니다: {exc}")
+            self._notify(f"목록에서 제거할 수 없습니다: {exc}")
 
     def _load_config(self, config: JobConfig) -> None:
         self._video_path = str(config.video_path)
@@ -1505,6 +1676,7 @@ class AppBridge(QObject):
         self._reasoning = config.reasoning_effort
         self._speed_mode = config.speed_mode
         self._language_pair = config.language_pair
+        self._term_hints = config.term_hints
         self._accelerator = config.accelerator
         self._cpu_threads = config.cpu_threads or 0
         self._diarization_enabled = config.diarization_enabled
@@ -1533,9 +1705,9 @@ class AppBridge(QObject):
         try:
             install_diarization_dependencies(Path(__file__).resolve().parents[2])
         except RuntimeError as exc:
-            self.notification.emit(str(exc))
+            self._notify(str(exc))
             return
-        self.notification.emit(
+        self._notify(
             "화자 분리 구성 요소 설치 창을 열었습니다. 설치가 끝나면 상태를 다시 확인하십시오."
         )
 
@@ -1544,17 +1716,17 @@ class AppBridge(QObject):
         if self._busy or self._diarization_busy:
             return
         if not self._diarization_available:
-            self.notification.emit(self._diarization_status)
+            self._notify(self._diarization_status)
             return
         login_huggingface()
-        self.notification.emit(
+        self._notify(
             "Hugging Face 로그인 창을 열었습니다. 토큰은 앱이 아닌 공식 CLI에 저장됩니다."
         )
 
     @Slot()
     def openDiarizationAgreement(self) -> None:
         if not self._diarization_available:
-            self.notification.emit(self._diarization_status)
+            self._notify(self._diarization_status)
             return
         open_official_page("diarization_agreement")
 
@@ -1563,7 +1735,7 @@ class AppBridge(QObject):
         if self._busy or self._diarization_busy:
             return
         if not self._diarization_available:
-            self.notification.emit(self._diarization_status)
+            self._notify(self._diarization_status)
             return
         self._diarization_busy = True
         self._diarization_status = "community-1 모델을 준비하고 있습니다."
@@ -1623,7 +1795,7 @@ class AppBridge(QObject):
     def performDiagnosticAction(self, action: str) -> None:
         try:
             if action == "download_model":
-                self.notification.emit(
+                self._notify(
                     "전사 모델의 용량과 저장 위치를 확인한 뒤 다운로드를 승인하십시오."
                 )
                 return
@@ -1647,9 +1819,9 @@ class AppBridge(QObject):
                 return
             else:
                 return
-            self.notification.emit("설치 또는 로그인 창을 열었습니다. 완료 후 다시 진단하십시오.")
+            self._notify("설치 또는 로그인 창을 열었습니다. 완료 후 다시 진단하십시오.")
         except Exception as exc:
-            self.notification.emit(str(exc))
+            self._notify(str(exc))
 
     def _set_diagnostic_report(self, report: DiagnosticReport) -> None:
         self._refresh_model_download_info()
@@ -1770,7 +1942,7 @@ class AppBridge(QObject):
         self._settings.setValue("diarization/device", self._diarization_device)
         self._settings.setValue("diarization/srt_labels", self._diarization_srt_labels)
         self._settings.sync()
-        self.notification.emit("설정을 저장했습니다.")
+        self._notify("설정을 저장했습니다.")
 
     @Slot()
     def resetSettings(self) -> None:
@@ -1806,6 +1978,7 @@ class AppBridge(QObject):
         self._resume_original_config = None
         self._video_path = ""
         self._code = ""
+        self._term_hints = ""
         self._output_dir = ""
         self._output_dir_auto = True
         self._file_meta = "영상을 선택하지 않았습니다."
@@ -1881,24 +2054,24 @@ class AppBridge(QObject):
             if isinstance(result, dict):
                 self._apply_account_checks(result)
             if error is not None:
-                self.notification.emit(str(error))
+                self._notify(str(error))
             elif operation == "account_logout":
-                self.notification.emit("로그아웃했습니다.")
+                self._notify("로그아웃했습니다.")
             self.accountsChanged.emit()
             return
         if operation == "resume_profile_check":
             self._busy = False
             if error is not None:
-                self.notification.emit(f"새 번역 설정을 사용할 수 없습니다: {error}")
+                self._notify(f"새 번역 설정을 사용할 수 없습니다: {error}")
                 self.stateChanged.emit()
                 return
             if not isinstance(result, tuple) or len(result) != 2:
-                self.notification.emit("번역 설정 확인 결과를 읽을 수 없습니다.")
+                self._notify("번역 설정 확인 결과를 읽을 수 없습니다.")
                 self.stateChanged.emit()
                 return
             previous, config = result
             if not isinstance(previous, JobConfig) or not isinstance(config, JobConfig):
-                self.notification.emit("번역 설정 확인 결과가 올바르지 않습니다.")
+                self._notify("번역 설정 확인 결과가 올바르지 않습니다.")
                 self.stateChanged.emit()
                 return
             self._resume_settings_mode = False
@@ -1913,13 +2086,13 @@ class AppBridge(QObject):
         if operation == "review_retry":
             self._review_busy = False
             if error is not None:
-                self.notification.emit(f"다시 번역하지 못했습니다: {error}")
+                self._notify(f"다시 번역하지 못했습니다: {error}")
             elif isinstance(result, dict) and result.get("action") == "review":
-                self.notification.emit(
+                self._notify(
                     f"모델이 여전히 판단을 보류했습니다: {result.get('reason') or ''}"
                 )
             else:
-                self.notification.emit("다시 번역한 결과를 저장했습니다.")
+                self._notify("다시 번역한 결과를 저장했습니다.")
             self.loadReviewItems()
             if self._quit_requested:
                 QCoreApplication.quit()
@@ -1930,21 +2103,21 @@ class AppBridge(QObject):
             if error is not None:
                 message = str(error)
                 self._diarization_status = message
-                self.notification.emit(message)
+                self._notify(message)
             else:
-                self.notification.emit("community-1 화자 분리 모델을 준비했습니다.")
+                self._notify("community-1 화자 분리 모델을 준비했습니다.")
             self.formChanged.emit()
             return
         if operation in {"diagnostic", "model_download"}:
             self._diagnostic_busy = False
             if error is not None:
                 self._diagnostic_summary = str(error)
-                self.notification.emit(str(error))
+                self._notify(str(error))
             elif operation == "diagnostic" and isinstance(result, DiagnosticReport):
                 self._set_diagnostic_report(result)
             else:
                 status = inspect_model_cache()
-                self.notification.emit(
+                self._notify(
                     "전사 모델 다운로드를 완료했습니다."
                     if status.ready
                     else "전사 모델 상태를 다시 확인하십시오."
@@ -2008,7 +2181,7 @@ class AppBridge(QObject):
                 self._task_title = "작업을 완료하지 못했습니다"
                 self._task_detail = message
                 self._screen = "running"
-            self.notification.emit(message)
+            self._notify(message)
         self.refreshJobs()
         self.stateChanged.emit()
         if self._quit_requested:

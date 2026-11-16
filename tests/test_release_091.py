@@ -136,3 +136,40 @@ class JapaneseWrapTests(unittest.TestCase):
         self.assertTrue(all(line for line in wrapped.split("\n")), repr(wrapped))
         long_text = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほ。"
         self.assertTrue(all(line for line in _wrap_japanese(long_text).split("\n")))
+
+
+class TermHintTests(unittest.TestCase):
+    def test_terms_reach_prompt_whisper_policy_and_config(self) -> None:
+        from local_subtitle_tool.core import parse_terms
+        from local_subtitle_tool.transcriber import _settings_fingerprint
+        from local_subtitle_tool.translator import _make_prompt
+
+        self.assertEqual(parse_terms("역모, 도승지、중전\n역모"), ["역모", "도승지", "중전"])
+        segments = [{"id": 0, "start": 0.0, "end": 1.0, "text": "영모의 소문"}]
+        with_terms = _make_prompt(
+            code="t",
+            all_segments=segments,
+            target_ids=[0],
+            context_size=2,
+            direction="ko-ja",
+            terms=["역모"],
+        )
+        self.assertIn('"glossary_terms"', with_terms)
+        self.assertIn("glossary_terms는 사용자가 알려 준", with_terms)
+        without = _make_prompt(
+            code="t", all_segments=segments, target_ids=[0], context_size=2, direction="ko-ja"
+        )
+        self.assertNotIn("glossary_terms", without)
+        self.assertIn("'역모'를 '영모'로 인식", without)  # the misrecognition rule
+        self.assertNotEqual(
+            _settings_fingerprint(language="ko", hotwords="역모"),
+            _settings_fingerprint(language="ko"),
+        )
+        root = Path(tempfile.mkdtemp())
+        config = JobConfig(
+            video_path=root / "m.mkv", code="m", output_dir=root, term_hints="역모, 중전"
+        )
+        self.assertEqual(JobConfig.from_dict(config.to_dict()).terms, ["역모", "중전"])
+        self.assertNotIn(
+            "term_hints", JobConfig(video_path=root, code="m", output_dir=root).to_dict()
+        )

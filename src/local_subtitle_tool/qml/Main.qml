@@ -68,6 +68,51 @@ ApplicationWindow {
                 Text { Layout.fillWidth: true; text: bridge.contextLabel; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 13; elide: Text.ElideRight }
                 Text { text: bridge.systemSummary; color: Theme.inkSoft; font.family: Theme.family; font.pixelSize: 12 }
                 Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 16; color: Theme.line }
+                // Screen language toggle: 한국어 | 日本語
+                Rectangle {
+                    id: languageToggle
+                    Layout.preferredWidth: languageRow.implicitWidth + 8
+                    Layout.preferredHeight: 26
+                    radius: 13
+                    color: "transparent"
+                    border.width: 1
+                    border.color: Theme.line
+                    Row {
+                        id: languageRow
+                        anchors.centerIn: parent
+                        spacing: 2
+                        Repeater {
+                            model: [["ko", "한국어"], ["ja", "日本語"]]
+                            delegate: Rectangle {
+                                id: languageChip
+                                required property var modelData
+                                readonly property bool active: bridge.uiLanguage === modelData[0]
+                                width: chipLabel.implicitWidth + 16
+                                height: 20
+                                radius: 10
+                                color: active ? Theme.selection : (chipMouse.containsMouse ? Theme.hover : "transparent")
+                                Accessible.role: Accessible.Button
+                                Accessible.name: modelData[1]
+                                Text {
+                                    id: chipLabel
+                                    anchors.centerIn: parent
+                                    text: languageChip.modelData[1]
+                                    color: languageChip.active ? Theme.ink : Theme.inkSoft
+                                    font.family: Theme.family
+                                    font.pixelSize: 12
+                                    font.weight: languageChip.active ? Font.DemiBold : Font.Normal
+                                }
+                                MouseArea {
+                                    id: chipMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: bridge.uiLanguage = languageChip.modelData[0]
+                                }
+                            }
+                        }
+                    }
+                }
                 // Light / dark theme toggle
                 Rectangle {
                     id: themeToggle
@@ -82,7 +127,7 @@ ApplicationWindow {
                     Text {
                         id: themeLabel
                         anchors.centerIn: parent
-                        text: bridge.darkMode ? "☀ 라이트 모드" : "☾ 다크 모드"
+                        text: bridge.darkMode ? bridge.tr("☀ 라이트 모드", bridge.uiLanguage) : bridge.tr("☾ 다크 모드", bridge.uiLanguage)
                         color: Theme.ink
                         font.family: Theme.family
                         font.pixelSize: 12
@@ -117,18 +162,18 @@ ApplicationWindow {
                     anchors.bottomMargin: 16
                     spacing: 2
 
-                    Text { text: "작업"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11; font.letterSpacing: 0.8; Layout.leftMargin: 8; Layout.bottomMargin: 7 }
-                    NavButton { Layout.fillWidth: true; text: "새 작업"; selected: bridge.screen === "home"; enabled: !bridge.busy; onClicked: bridge.showScreen("home") }
-                    NavButton { Layout.fillWidth: true; text: "실행 중"; selected: bridge.screen === "running"; enabled: bridge.busy || bridge.screen === "running"; onClicked: bridge.showScreen("running") }
-                    NavButton { Layout.fillWidth: true; text: "번역 검토"; visible: bridge.reviewItems.length > 0; selected: bridge.screen === "review"; enabled: !bridge.busy; onClicked: bridge.showScreen("review") }
-                    NavButton { Layout.fillWidth: true; text: "이전 작업"; selected: bridge.screen === "jobs"; enabled: !bridge.busy; onClicked: bridge.showScreen("jobs") }
-                    Text { text: "시스템"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11; font.letterSpacing: 0.8; Layout.leftMargin: 8; Layout.topMargin: 16; Layout.bottomMargin: 7 }
-                    NavButton { Layout.fillWidth: true; text: "환경 진단"; selected: bridge.screen === "diagnostic"; enabled: !bridge.busy; onClicked: bridge.showScreen("diagnostic") }
-                    NavButton { Layout.fillWidth: true; text: "고급 설정"; selected: bridge.screen === "settings"; enabled: !bridge.busy; onClicked: bridge.showScreen("settings") }
-                    NavButton { Layout.fillWidth: true; text: "완료된 작업"; selected: bridge.screen === "done"; enabled: !bridge.busy && bridge.resultFiles.length > 0; onClicked: bridge.showScreen("done") }
+                    Text { text: bridge.tr("작업", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11; font.letterSpacing: 0.8; Layout.leftMargin: 8; Layout.bottomMargin: 7 }
+                    NavButton { Layout.fillWidth: true; text: bridge.tr("새 작업", bridge.uiLanguage); selected: bridge.screen === "home"; enabled: !bridge.busy; onClicked: bridge.showScreen("home") }
+                    NavButton { Layout.fillWidth: true; text: bridge.tr("실행 중", bridge.uiLanguage); selected: bridge.screen === "running"; enabled: bridge.busy || bridge.screen === "running"; onClicked: bridge.showScreen("running") }
+                    NavButton { Layout.fillWidth: true; text: bridge.tr("번역 검토", bridge.uiLanguage); visible: bridge.reviewItems.length > 0; selected: bridge.screen === "review"; enabled: !bridge.busy; onClicked: bridge.showScreen("review") }
+                    NavButton { Layout.fillWidth: true; text: bridge.tr("이전 작업", bridge.uiLanguage); selected: bridge.screen === "jobs"; enabled: !bridge.busy; onClicked: bridge.showScreen("jobs") }
+                    Text { text: bridge.tr("시스템", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11; font.letterSpacing: 0.8; Layout.leftMargin: 8; Layout.topMargin: 16; Layout.bottomMargin: 7 }
+                    NavButton { Layout.fillWidth: true; text: bridge.tr("환경 진단", bridge.uiLanguage); selected: bridge.screen === "diagnostic"; enabled: !bridge.busy; onClicked: bridge.showScreen("diagnostic") }
+                    NavButton { Layout.fillWidth: true; text: bridge.tr("고급 설정", bridge.uiLanguage); selected: bridge.screen === "settings"; enabled: !bridge.busy; onClicked: bridge.showScreen("settings") }
+                    NavButton { Layout.fillWidth: true; text: bridge.tr("완료된 작업", bridge.uiLanguage); selected: bridge.screen === "done"; enabled: !bridge.busy && bridge.resultFiles.length > 0; onClicked: bridge.showScreen("done") }
                     Item { Layout.fillHeight: true }
                     Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Theme.line }
-                    Text { text: bridge.appName + " " + bridge.appVersion + "\n로컬 처리 · 자동 저장"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11; lineHeight: 1.2; Layout.leftMargin: 8; Layout.topMargin: 10 }
+                    Text { text: bridge.appName + " " + bridge.appVersion + bridge.tr("\n로컬 처리 · 자동 저장", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11; lineHeight: 1.2; Layout.leftMargin: 8; Layout.topMargin: 10 }
                 }
             }
 
@@ -206,10 +251,10 @@ ApplicationWindow {
         id: quitDialog
         anchors.centerIn: parent
         modal: true
-        title: "작업 중 종료"
+        title: bridge.tr("작업 중 종료", bridge.uiLanguage)
         standardButtons: Dialog.Ok | Dialog.Cancel
         Text {
-            text: "실행 중인 작업을 안전 지점까지 저장하고 종료합니다.\n번역 CLI 프로세스도 함께 종료합니다."
+            text: bridge.tr("실행 중인 작업을 안전 지점까지 저장하고 종료합니다.\n번역 CLI 프로세스도 함께 종료합니다.", bridge.uiLanguage)
             font.family: Theme.family
             font.pixelSize: 14
             color: Theme.ink

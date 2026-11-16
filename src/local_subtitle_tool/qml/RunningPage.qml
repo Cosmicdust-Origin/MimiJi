@@ -6,7 +6,7 @@ import "components"
 
 Item {
     id: root
-    readonly property var phaseNames: ["환경 확인", "음성 전사", "직접 번역", "검증·출력"]
+    readonly property var phaseNames: [bridge.tr("환경 확인", bridge.uiLanguage), bridge.tr("음성 전사", bridge.uiLanguage), bridge.tr("직접 번역", bridge.uiLanguage), bridge.tr("검증·출력", bridge.uiLanguage)]
 
     ColumnLayout {
         anchors.fill: parent
@@ -17,10 +17,10 @@ Item {
             eyebrow: bridge.code
             title: bridge.taskTitle
             description: bridge.busy
-                         ? "설정은 작업이 끝나거나 중지될 때까지 잠깁니다."
+                         ? bridge.tr("설정은 작업이 끝나거나 중지될 때까지 잠깁니다.", bridge.uiLanguage)
                          : bridge.taskDetail
             AppButton {
-                text: "작업 중지"
+                text: bridge.tr("작업 중지", bridge.uiLanguage)
                 kind: "danger"
                 visible: bridge.busy
                 onClicked: bridge.stopJob()
@@ -45,7 +45,7 @@ Item {
                         Layout.fillWidth: true
                         spacing: 5
                         Text {
-                            text: "현재 단계"
+                            text: bridge.tr("현재 단계", bridge.uiLanguage)
                             color: Theme.inkSoft
                             font.family: Theme.family
                             font.pixelSize: 12
@@ -98,8 +98,8 @@ Item {
                                 font.weight: index === bridge.phaseIndex ? Font.DemiBold : Font.Normal
                             }
                             Text {
-                                text: index < bridge.phaseIndex ? "완료"
-                                      : index === bridge.phaseIndex ? bridge.taskDetail : "대기"
+                                text: index < bridge.phaseIndex ? bridge.tr("완료", bridge.uiLanguage)
+                                      : index === bridge.phaseIndex ? bridge.taskDetail : bridge.tr("대기", bridge.uiLanguage)
                                 color: index === bridge.phaseIndex ? Theme.inkSoft : Theme.inkFaint
                                 font.family: Theme.family
                                 font.pixelSize: 11
@@ -165,7 +165,7 @@ Item {
                 }
 
                 Text {
-                    text: "최근 로그"
+                    text: bridge.tr("최근 로그", bridge.uiLanguage)
                     color: Theme.inkFaint
                     font.family: Theme.family
                     font.pixelSize: 11
@@ -235,9 +235,9 @@ Item {
                     Layout.fillWidth: true
                     Repeater {
                         model: [
-                            {label: "경과", value: bridge.elapsedText},
-                            {label: "남은 시간", value: bridge.etaText},
-                            {label: "저장", value: bridge.lastSavedText}
+                            {label: bridge.tr("경과", bridge.uiLanguage), value: bridge.elapsedText},
+                            {label: bridge.tr("남은 시간", bridge.uiLanguage), value: bridge.etaText},
+                            {label: bridge.tr("저장", bridge.uiLanguage), value: bridge.lastSavedText}
                         ]
                         delegate: ColumnLayout {
                             required property var modelData
@@ -251,7 +251,7 @@ Item {
                 Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 12; color: Theme.line }
 
                 Text {
-                    text: "실행 정보"
+                    text: bridge.tr("실행 정보", bridge.uiLanguage)
                     color: Theme.ink
                     font.family: Theme.family
                     font.pixelSize: 12
@@ -264,28 +264,28 @@ Item {
                     columns: 2
                     rowSpacing: 10
                     columnSpacing: 12
-                    Text { text: "전사"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
+                    Text { text: bridge.tr("전사", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
                     Text { text: "large-v3"; color: Theme.ink; font.family: Theme.family; font.pixelSize: 11; font.weight: Font.DemiBold }
-                    Text { text: "번역"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
+                    Text { text: bridge.tr("번역", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
                     Text { text: bridge.model; color: Theme.ink; font.family: Theme.family; font.pixelSize: 11; font.weight: Font.DemiBold; elide: Text.ElideRight; Layout.fillWidth: true }
-                    Text { text: "사고"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
+                    Text { text: bridge.tr("사고", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
                     Text { text: bridge.reasoning; color: Theme.ink; font.family: Theme.family; font.pixelSize: 11; font.weight: Font.DemiBold }
-                    Text { text: "속도"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
+                    Text { text: bridge.tr("속도", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
                     Text { text: bridge.speedMode; color: Theme.ink; font.family: Theme.family; font.pixelSize: 11; font.weight: Font.DemiBold }
-                    Text { text: "화자"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
-                    Text { text: bridge.diarizationEnabled ? bridge.diarizationAlignment : "사용 안 함"; color: Theme.ink; font.family: Theme.family; font.pixelSize: 11; font.weight: Font.DemiBold }
-                    Text { visible: bridge.requestPhase.length > 0; text: "요청"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
+                    Text { text: bridge.tr("화자", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
+                    Text { text: bridge.diarizationEnabled ? bridge.diarizationAlignment : bridge.tr("사용 안 함", bridge.uiLanguage); color: Theme.ink; font.family: Theme.family; font.pixelSize: 11; font.weight: Font.DemiBold }
+                    Text { visible: bridge.requestPhase.length > 0; text: bridge.tr("요청", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
                     Text { visible: bridge.requestPhase.length > 0; text: bridge.requestPhase; color: Theme.ink; font.family: Theme.family; font.pixelSize: 11; font.weight: Font.DemiBold; elide: Text.ElideRight; Layout.fillWidth: true }
-                    Text { visible: bridge.requestPhase.length > 0; text: "배치 경과"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
+                    Text { visible: bridge.requestPhase.length > 0; text: bridge.tr("배치 경과", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
                     Text { visible: bridge.requestPhase.length > 0; text: bridge.requestElapsedText; color: Theme.ink; font.family: Theme.family; font.pixelSize: 11; font.weight: Font.DemiBold }
-                    Text { visible: bridge.requestPhase.length > 0; text: "첫 응답"; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
+                    Text { visible: bridge.requestPhase.length > 0; text: bridge.tr("첫 응답", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
                     Text { visible: bridge.requestPhase.length > 0; text: bridge.firstEventText; color: Theme.ink; font.family: Theme.family; font.pixelSize: 11; font.weight: Font.DemiBold }
                 }
                 Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; Layout.topMargin: 18; color: Theme.line }
                 Text {
                     Layout.fillWidth: true
                     Layout.topMargin: 18
-                    text: "중지해도 완료된 전사 클립과 번역 배치는 보존됩니다."
+                    text: bridge.tr("중지해도 완료된 전사 클립과 번역 배치는 보존됩니다.", bridge.uiLanguage)
                     color: Theme.inkSoft
                     font.family: Theme.family
                     font.pixelSize: 12
@@ -297,10 +297,10 @@ Item {
 
         FooterBar {
             Layout.fillWidth: true
-            title: "작업 데이터 자동 저장"
-            detail: "다시 실행하면 마지막 안전 지점부터 이어집니다."
+            title: bridge.tr("작업 데이터 자동 저장", bridge.uiLanguage)
+            detail: bridge.tr("다시 실행하면 마지막 안전 지점부터 이어집니다.", bridge.uiLanguage)
             AppButton {
-                text: "작업 폴더 열기"
+                text: bridge.tr("작업 폴더 열기", bridge.uiLanguage)
                 enabled: bridge.outputDir.length > 0
                 onClicked: bridge.openOutputFolder()
             }

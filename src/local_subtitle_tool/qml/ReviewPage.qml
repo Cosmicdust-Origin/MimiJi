@@ -40,25 +40,25 @@ Item {
         PageHeader {
             Layout.fillWidth: true
             eyebrow: bridge.code
-            title: "번역 검토"
+            title: bridge.tr("번역 검토", bridge.uiLanguage)
             description: bridge.reviewUnresolvedCount > 0
-                         ? "미해결 " + bridge.reviewUnresolvedCount + "개가 남아 있어 아직 자막 파일을 만들지 않았습니다."
-                         : "모든 항목을 처리했습니다. 아래 '자막 만들기'를 누르십시오."
+                         ? bridge.tr("미해결 ", bridge.uiLanguage) + bridge.reviewUnresolvedCount + bridge.tr("개가 남아 있어 아직 자막 파일을 만들지 않았습니다.", bridge.uiLanguage)
+                         : bridge.tr("모든 항목을 처리했습니다. 아래 '자막 만들기'를 누르십시오.", bridge.uiLanguage)
             AppButton {
-                text: "모델 번역 모두 채택 (" + bridge.reviewAcceptableCount + ")"
+                text: bridge.tr("모델 번역 모두 채택 (", bridge.uiLanguage) + bridge.reviewAcceptableCount + ")"
                 visible: bridge.reviewAcceptableCount > 0
                 enabled: root.idle
                 onClicked: bridge.acceptAllReviewItems()
             }
             AppButton {
-                text: "남은 항목 모두 삭제"
+                text: bridge.tr("남은 항목 모두 삭제", bridge.uiLanguage)
                 kind: "danger"
                 visible: bridge.reviewUnresolvedCount > 0
                 enabled: root.idle
                 onClicked: omitAllDialog.open()
             }
             AppButton {
-                text: "보류 배치 다시 요청"
+                text: bridge.tr("보류 배치 다시 요청", bridge.uiLanguage)
                 visible: bridge.reviewHasHeld
                 enabled: root.idle
                 onClicked: bridge.retryHeldBatches()
@@ -84,7 +84,7 @@ Item {
                 spacing: 4
                 Text {
                     Layout.fillWidth: true
-                    text: "아래 줄은 모델이 번역에 확신하지 못했거나(검토 필요) 번역하지 못한(보류) 대사입니다. 줄마다 하나를 고르십시오."
+                    text: bridge.tr("아래 줄은 모델이 번역에 확신하지 못했거나(검토 필요) 번역하지 못한(보류) 대사입니다. 줄마다 하나를 고르십시오.", bridge.uiLanguage)
                     color: Theme.ink
                     font.family: Theme.family
                     font.pixelSize: 13
@@ -92,10 +92,10 @@ Item {
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: "• 채택: '모델 번역'을 그대로 자막에 씁니다.\n"
-                          + "• 수정 저장: '" + bridge.targetLanguageName + " 자막' 칸을 고친 뒤 저장합니다. " + bridge.sourceLanguageName + " 칸은 원문을 고칠 때만 바꾸면 됩니다.\n"
-                          + "• 삭제: 말이 없는 소리·잡음·잘못 인식된 줄처럼 자막에 넣을 필요가 없을 때 뺍니다.\n"
-                          + "• 다시 번역: 모델에 한 번 더 요청합니다."
+                    text: bridge.tr("• 채택: '모델 번역'을 그대로 자막에 씁니다.\n", bridge.uiLanguage)
+                          + bridge.tr("• 수정 저장: '", bridge.uiLanguage) + bridge.targetLanguageName + bridge.tr(" 자막' 칸을 고친 뒤 저장합니다. ", bridge.uiLanguage) + bridge.sourceLanguageName + bridge.tr(" 칸은 원문을 고칠 때만 바꾸면 됩니다.\n", bridge.uiLanguage)
+                          + bridge.tr("• 삭제: 말이 없는 소리·잡음·잘못 인식된 줄처럼 자막에 넣을 필요가 없을 때 뺍니다.\n", bridge.uiLanguage)
+                          + bridge.tr("• 다시 번역: 모델에 한 번 더 요청합니다.", bridge.uiLanguage)
                     color: Theme.inkSoft
                     font.family: Theme.family
                     font.pixelSize: 12
@@ -162,8 +162,8 @@ Item {
                                     text: row.modelData.resolved
                                           ? "✓ " + row.modelData.resolution_label
                                           : (row.held
-                                             ? (row.modelData.held_kind ? "보류 · " + row.modelData.held_kind : "보류")
-                                             : "검토 필요")
+                                             ? (row.modelData.held_kind ? bridge.tr("보류 · ", bridge.uiLanguage) + row.modelData.held_kind : bridge.tr("보류", bridge.uiLanguage))
+                                             : bridge.tr("검토 필요", bridge.uiLanguage))
                                     color: row.modelData.resolved ? Theme.inkSoft : Theme.danger
                                     font.family: Theme.family
                                     font.pixelSize: 12
@@ -171,19 +171,19 @@ Item {
                                 }
                                 Item { Layout.fillWidth: true }
                                 AppButton {
-                                    text: "채택"
+                                    text: bridge.tr("채택", bridge.uiLanguage)
                                     visible: row.hasModelKo && !row.modelData.resolved
                                     enabled: root.idle
                                     onClicked: bridge.acceptReviewItem(row.modelData.raw_id)
                                 }
                                 AppButton {
-                                    text: "삭제"
+                                    text: bridge.tr("삭제", bridge.uiLanguage)
                                     kind: "danger"
                                     enabled: root.idle
                                     onClicked: bridge.omitReviewItem(row.modelData.raw_id)
                                 }
                                 AppButton {
-                                    text: bridge.reviewBusy ? "처리 중" : "다시 번역"
+                                    text: bridge.reviewBusy ? bridge.tr("처리 중", bridge.uiLanguage) : bridge.tr("다시 번역", bridge.uiLanguage)
                                     kind: "quiet"
                                     enabled: root.idle
                                     onClicked: bridge.retryReviewItem(row.modelData.raw_id)
@@ -200,7 +200,7 @@ Item {
                                     Layout.preferredWidth: 64
                                     Layout.alignment: Qt.AlignTop
                                     topPadding: 2
-                                    text: "원문"
+                                    text: bridge.tr("원문", bridge.uiLanguage)
                                     color: Theme.inkFaint
                                     font.family: Theme.family
                                     font.pixelSize: 12
@@ -216,7 +216,7 @@ Item {
                                 Text {
                                     Layout.preferredWidth: 64
                                     Layout.alignment: Qt.AlignVCenter
-                                    text: "모델 번역"
+                                    text: bridge.tr("모델 번역", bridge.uiLanguage)
                                     color: Theme.inkFaint
                                     font.family: Theme.family
                                     font.pixelSize: 12
@@ -237,7 +237,7 @@ Item {
                                         anchors.rightMargin: 10
                                         text: row.hasModelKo
                                               ? row.modelData.ko
-                                              : (row.held ? "없음 — 직접 입력하거나 삭제하거나 다시 요청하십시오." : "없음")
+                                              : (row.held ? bridge.tr("없음 — 직접 입력하거나 삭제하거나 다시 요청하십시오.", bridge.uiLanguage) : bridge.tr("없음", bridge.uiLanguage))
                                         color: row.hasModelKo ? Theme.ink : Theme.inkFaint
                                         font.family: Theme.family
                                         font.pixelSize: 15
@@ -250,7 +250,7 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.leftMargin: 76
                                 visible: row.modelData.reason.length > 0
-                                text: "모델이 남긴 사유: " + row.modelData.reason
+                                text: bridge.tr("모델이 남긴 사유: ", bridge.uiLanguage) + row.modelData.reason
                                 color: Theme.inkFaint
                                 font.family: Theme.family
                                 font.pixelSize: 12
@@ -264,7 +264,7 @@ Item {
                                     Layout.preferredWidth: 2
                                     spacing: 2
                                     Text {
-                                        text: bridge.targetLanguageName + " 자막 (고칠 때만)"
+                                        text: bridge.targetLanguageName + bridge.tr(" 자막 (고칠 때만)", bridge.uiLanguage)
                                         color: Theme.inkFaint
                                         font.family: Theme.family
                                         font.pixelSize: 11
@@ -272,7 +272,7 @@ Item {
                                     LineField {
                                         id: koField
                                         Layout.fillWidth: true
-                                        placeholderText: "자막에 들어갈 " + bridge.targetLanguageName + " 문장"
+                                        placeholderText: bridge.tr("자막에 들어갈 ", bridge.uiLanguage) + bridge.targetLanguageName + bridge.tr(" 문장", bridge.uiLanguage)
                                         text: root.draftValue(row.modelData.raw_id, "ko", row.modelData.ko)
                                         enabled: !bridge.busy
                                         onTextEdited: root.setDraft(row.modelData.raw_id, "ko", text)
@@ -283,7 +283,7 @@ Item {
                                     Layout.preferredWidth: 1
                                     spacing: 2
                                     Text {
-                                        text: bridge.sourceLanguageName + " 원문 보정 (선택)"
+                                        text: bridge.sourceLanguageName + bridge.tr(" 원문 보정 (선택)", bridge.uiLanguage)
                                         color: Theme.inkFaint
                                         font.family: Theme.family
                                         font.pixelSize: 11
@@ -291,7 +291,7 @@ Item {
                                     LineField {
                                         id: jaField
                                         Layout.fillWidth: true
-                                        placeholderText: "비워 두면 원문 그대로"
+                                        placeholderText: bridge.tr("비워 두면 원문 그대로", bridge.uiLanguage)
                                         text: root.draftValue(row.modelData.raw_id, "ja", row.modelData.ja_fixed)
                                         enabled: !bridge.busy
                                         onTextEdited: root.setDraft(row.modelData.raw_id, "ja", text)
@@ -299,7 +299,7 @@ Item {
                                 }
                                 AppButton {
                                     Layout.alignment: Qt.AlignBottom
-                                    text: "수정 저장"
+                                    text: bridge.tr("수정 저장", bridge.uiLanguage)
                                     enabled: root.idle && koField.text.length > 0
                                     onClicked: {
                                         var rawId = row.modelData.raw_id
@@ -314,7 +314,7 @@ Item {
 
                 Text {
                     visible: bridge.reviewItems.length === 0
-                    text: "검토할 항목이 없습니다."
+                    text: bridge.tr("검토할 항목이 없습니다.", bridge.uiLanguage)
                     color: Theme.inkFaint
                     font.family: Theme.family
                     font.pixelSize: 13
@@ -326,17 +326,17 @@ Item {
         FooterBar {
             Layout.fillWidth: true
             title: bridge.reviewUnresolvedCount > 0
-                   ? "남은 " + bridge.reviewUnresolvedCount + "개를 처리하면 자막을 만들 수 있습니다"
-                   : "모든 항목을 처리했습니다"
-            detail: "처리한 내용은 바로 저장됩니다. 자막 만들기는 저장된 번역으로 검증과 출력만 다시 실행합니다."
+                   ? bridge.tr("남은 ", bridge.uiLanguage) + bridge.reviewUnresolvedCount + bridge.tr("개를 처리하면 자막을 만들 수 있습니다", bridge.uiLanguage)
+                   : bridge.tr("모든 항목을 처리했습니다", bridge.uiLanguage)
+            detail: bridge.tr("처리한 내용은 바로 저장됩니다. 자막 만들기는 저장된 번역으로 검증과 출력만 다시 실행합니다.", bridge.uiLanguage)
             AppButton {
-                text: "목록 새로고침"
+                text: bridge.tr("목록 새로고침", bridge.uiLanguage)
                 kind: "quiet"
                 enabled: root.idle
                 onClicked: bridge.loadReviewItems()
             }
             AppButton {
-                text: "자막 만들기"
+                text: bridge.tr("자막 만들기", bridge.uiLanguage)
                 kind: "primary"
                 enabled: root.idle && bridge.reviewUnresolvedCount === 0
                 onClicked: bridge.finishReview()
@@ -359,7 +359,7 @@ Item {
             spacing: 14
             Text {
                 Layout.fillWidth: true
-                text: "남은 " + bridge.reviewUnresolvedCount + "개를 자막에서 삭제할까요?"
+                text: bridge.tr("남은 ", bridge.uiLanguage) + bridge.reviewUnresolvedCount + bridge.tr("개를 자막에서 삭제할까요?", bridge.uiLanguage)
                 color: Theme.ink
                 font.family: Theme.family
                 font.pixelSize: 18
@@ -368,7 +368,7 @@ Item {
             }
             Text {
                 Layout.fillWidth: true
-                text: "아직 처리하지 않은 줄이 모두 자막에서 빠집니다. 실제 대사가 섞여 있으면 그 대사도 빠지니, 먼저 '모델 번역 모두 채택'을 고려하십시오. 자막 만들기 전까지는 삭제한 줄에 직접 입력해 되살릴 수 있습니다."
+                text: bridge.tr("아직 처리하지 않은 줄이 모두 자막에서 빠집니다. 실제 대사가 섞여 있으면 그 대사도 빠지니, 먼저 '모델 번역 모두 채택'을 고려하십시오. 자막 만들기 전까지는 삭제한 줄에 직접 입력해 되살릴 수 있습니다.", bridge.uiLanguage)
                 color: Theme.inkSoft
                 font.family: Theme.family
                 font.pixelSize: 13
@@ -378,12 +378,12 @@ Item {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
                 AppButton {
-                    text: "취소"
+                    text: bridge.tr("취소", bridge.uiLanguage)
                     kind: "quiet"
                     onClicked: omitAllDialog.close()
                 }
                 AppButton {
-                    text: "모두 삭제"
+                    text: bridge.tr("모두 삭제", bridge.uiLanguage)
                     kind: "danger"
                     onClicked: {
                         omitAllDialog.close()

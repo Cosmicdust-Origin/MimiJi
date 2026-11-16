@@ -12,7 +12,7 @@ Item {
         anchors.centerIn: parent
         width: Math.min(620, parent.width - 48)
         modal: true
-        title: "전사 모델 다운로드"
+        title: bridge.tr("전사 모델 다운로드", bridge.uiLanguage)
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: bridge.confirmModelDownload()
 
@@ -21,7 +21,7 @@ Item {
             spacing: 10
             Text {
                 Layout.fillWidth: true
-                text: "faster-whisper large-v3 모델을 다운로드합니다."
+                text: bridge.tr("faster-whisper large-v3 모델을 다운로드합니다.", bridge.uiLanguage)
                 color: Theme.ink
                 font.family: Theme.family
                 font.pixelSize: 14
@@ -29,9 +29,9 @@ Item {
             }
             Text {
                 Layout.fillWidth: true
-                text: "용량  " + bridge.modelDownloadSize
-                      + "\n저장 위치  " + bridge.modelDownloadCachePath
-                      + "\n현재 여유 공간  " + bridge.modelDownloadFreeSpace
+                text: bridge.tr("용량  ", bridge.uiLanguage) + bridge.modelDownloadSize
+                      + bridge.tr("\n저장 위치  ", bridge.uiLanguage) + bridge.modelDownloadCachePath
+                      + bridge.tr("\n현재 여유 공간  ", bridge.uiLanguage) + bridge.modelDownloadFreeSpace
                 color: Theme.inkSoft
                 font.family: Theme.family
                 font.pixelSize: 12
@@ -39,7 +39,7 @@ Item {
             }
             Text {
                 Layout.fillWidth: true
-                text: "다운로드가 끝날 때까지 앱을 종료하지 마십시오."
+                text: bridge.tr("다운로드가 끝날 때까지 앱을 종료하지 마십시오.", bridge.uiLanguage)
                 color: Theme.inkFaint
                 font.family: Theme.family
                 font.pixelSize: 11
@@ -55,10 +55,10 @@ Item {
         PageHeader {
             Layout.fillWidth: true
             eyebrow: "First run"
-            title: "환경 진단"
-            description: "이 컴퓨터에서 사용할 전사 방식과 번역 계정을 확인합니다."
+            title: bridge.tr("환경 진단", bridge.uiLanguage)
+            description: bridge.tr("이 컴퓨터에서 사용할 전사 방식과 번역 계정을 확인합니다.", bridge.uiLanguage)
             Text {
-                text: bridge.diagnosticBusy ? "진단 중" : "전체 진단 · 약 10초"
+                text: bridge.diagnosticBusy ? bridge.tr("진단 중", bridge.uiLanguage) : bridge.tr("전체 진단 · 약 10초", bridge.uiLanguage)
                 color: Theme.inkFaint
                 font.family: Theme.family
                 font.pixelSize: 12
@@ -78,9 +78,9 @@ Item {
                 spacing: 18
                 Repeater {
                     model: [
-                        {title: "1. 실행 환경", detail: "하드웨어와 필수 도구"},
-                        {title: "2. 전사 모델", detail: "다운로드와 저장 위치"},
-                        {title: "3. 번역 계정", detail: "Codex 또는 Claude"}
+                        {title: bridge.tr("1. 실행 환경", bridge.uiLanguage), detail: bridge.tr("하드웨어와 필수 도구", bridge.uiLanguage)},
+                        {title: bridge.tr("2. 전사 모델", bridge.uiLanguage), detail: bridge.tr("다운로드와 저장 위치", bridge.uiLanguage)},
+                        {title: bridge.tr("3. 번역 계정", bridge.uiLanguage), detail: bridge.tr("Codex 또는 Claude", bridge.uiLanguage)}
                     ]
                     delegate: ColumnLayout {
                         required property var modelData
@@ -102,8 +102,8 @@ Item {
                 Layout.topMargin: 23
                 spacing: 0
 
-                Text { text: "실행 환경"; color: Theme.ink; font.family: Theme.family; font.pixelSize: 15; font.weight: Font.DemiBold }
-                Text { text: "설치 여부가 아니라 실제 실행 가능 여부를 확인합니다."; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 12; Layout.topMargin: 4 }
+                Text { text: bridge.tr("실행 환경", bridge.uiLanguage); color: Theme.ink; font.family: Theme.family; font.pixelSize: 15; font.weight: Font.DemiBold }
+                Text { text: bridge.tr("설치 여부가 아니라 실제 실행 가능 여부를 확인합니다.", bridge.uiLanguage); color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 12; Layout.topMargin: 4 }
 
                 ScrollView {
                     Layout.fillWidth: true
@@ -140,7 +140,7 @@ Item {
                                     AppButton {
                                         visible: Boolean(modelData.action)
                                         Layout.preferredWidth: visible ? 82 : 0
-                                        text: modelData.action_label || "조치"
+                                        text: modelData.action_label || bridge.tr("조치", bridge.uiLanguage)
                                         kind: modelData.problem ? "danger" : "default"
                                         enabled: !bridge.diagnosticBusy && !bridge.busy
                                         onClicked: {
@@ -179,17 +179,17 @@ Item {
 
         FooterBar {
             Layout.fillWidth: true
-            title: bridge.diagnosticBusy ? "환경을 확인하고 있습니다." : bridge.systemSummary
-            detail: "CUDA를 사용할 수 없으면 자동 전환하지 않고 CPU 사용 여부를 선택합니다."
+            title: bridge.diagnosticBusy ? bridge.tr("환경을 확인하고 있습니다.", bridge.uiLanguage) : bridge.systemSummary
+            detail: bridge.tr("CUDA를 사용할 수 없으면 자동 전환하지 않고 CPU 사용 여부를 선택합니다.", bridge.uiLanguage)
             AppButton {
                 text: bridge.diagnosticBusy
-                      ? "진단 중"
-                      : bridge.diagnosticRows.length > 0 ? "다시 진단" : "진단 시작"
+                      ? bridge.tr("진단 중", bridge.uiLanguage)
+                      : bridge.diagnosticRows.length > 0 ? bridge.tr("다시 진단", bridge.uiLanguage) : bridge.tr("진단 시작", bridge.uiLanguage)
                 enabled: !bridge.diagnosticBusy && !bridge.busy
                 onClicked: bridge.runDiagnostic()
             }
             AppButton {
-                text: "새 작업"
+                text: bridge.tr("새 작업", bridge.uiLanguage)
                 kind: "primary"
                 enabled: !bridge.diagnosticBusy && !bridge.busy
                 onClicked: bridge.showScreen("home")

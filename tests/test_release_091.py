@@ -86,6 +86,44 @@ class KoreanToJapaneseTests(unittest.TestCase):
         self.assertIn("한국어 음성 인식 결과를 보정하고 일본어 자막으로", prompts[0])
         self.assertIn("ko_fix_required_raw_ids", prompts[0])
 
+    def test_prompt_cleans_only_nonsemantic_fillers_and_preserves_event_structure(self) -> None:
+        from local_subtitle_tool.translator import _make_prompt
+
+        segments = [
+            {
+                "id": 0,
+                "start": 0.0,
+                "end": 7.0,
+                "text": (
+                    "내가 저거 밥 먹는데 이제 뭐 예를 들면 내 여자친구가 "
+                    "내 친구에게 깻잎을 떼어주는 게 괜찮냐 안 괜찮냐 그거 얘기하는 거죠?"
+                ),
+            }
+        ]
+        ko_ja = _make_prompt(
+            code="깻잎 논쟁",
+            all_segments=segments,
+            target_ids=[0],
+            context_size=0,
+            direction="ko-ja",
+        )
+        self.assertIn("비의미적 필러", ko_ja)
+        self.assertIn("기능하는 표현은 삭제하지 말고", ko_ja)
+        self.assertIn("핵심 사건 구조", ko_ja)
+        self.assertIn("부착·분리", ko_ja)
+        self.assertIn("剥がしてあげる", ko_ja)
+        self.assertIn("매달린 절이나 비문", ko_ja)
+
+        ja_ko = _make_prompt(
+            code="일반 번역",
+            all_segments=[{"id": 0, "start": 0.0, "end": 1.0, "text": "あの、つまり"}],
+            target_ids=[0],
+            context_size=0,
+        )
+        self.assertIn("비의미적 필러", ja_ko)
+        self.assertIn("핵심 사건 구조", ja_ko)
+        self.assertIn("한국어 화자의 관점", ja_ko)
+
     def test_translation_and_subtitles(self) -> None:
         config = self.job()
         decisions = self.run_with(LaneProvider(lambda ids, n: ko_ja(ids)), config)

@@ -48,8 +48,10 @@ MODEL_NAME = "large-v3"
 #    with clip_timestamps, where faster-whisper silently ignores vad_filter).
 # 3: rescue pass (windows where VAD heard almost nothing but the audio is loud are
 #    decoded whole) and collapsed phrase loops.
-CHECKPOINT_SCHEMA_VERSION = 3
-LEGACY_CHECKPOINT_SCHEMA_VERSION = 2
+# 4: also rescue loud internal gaps, so quiet speech is not hidden by louder speech in
+#    the same 30-second window.
+CHECKPOINT_SCHEMA_VERSION = 4
+LEGACY_CHECKPOINT_SCHEMA_VERSION = 3
 
 # Rescue pass. Silero VAD can classify short lines buried in moans and background
 # sound as non-speech (테스트 영상 E: 1 s of "speech" in 70-107 min while the audio was
@@ -61,7 +63,10 @@ RESCUE_MAX_NO_SPEECH = 0.6
 RESCUE_MIN_LOGPROB = -1.0
 RESCUE_MAX_COMPRESSION = 2.4
 RESCUE_MAX_CHARACTER_RUN = 15
-RESCUE_OVERLAP_RATIO = 0.5
+RESCUE_OVERLAP_RATIO = 0.4
+RESCUE_DUPLICATE_SECONDS = 3.0
+RESCUE_MIN_GAP_SECONDS = 2.5
+RESCUE_GAP_PAD_SECONDS = 0.5
 # Rescue windows are decoded together on the GPU, 16 windows per round
 # (테스트 영상 B: 24 windows in 18.9 s batched vs 40.3 s one by one).
 RESCUE_BATCH_WINDOWS = 16
@@ -138,15 +143,9 @@ def _source_fingerprint(config: JobConfig, duration: float) -> str:
 
 
 def _accepted_raw_fingerprints(language: str = "ja") -> set[str]:
-    """Finished raw transcriptions from these policies are reused as they are."""
+    """Finished raw transcriptions reusable without missing the new rescue pass."""
 
-    if language != "ja":
-        return {_settings_fingerprint(language=language)}
-    return {
-        _settings_fingerprint(),
-        _settings_fingerprint(legacy=True),
-        _settings_fingerprint(rescue_decode=None),
-    }
+    return {_settings_fingerprint(language=language)}
 
 
 def _absolute_segment(segment: Any, duration: float) -> dict[str, Any]:
@@ -213,12 +212,18 @@ def _settings_fingerprint(
             "max_compression": RESCUE_MAX_COMPRESSION,
             "max_character_run": RESCUE_MAX_CHARACTER_RUN,
             "overlap_ratio": RESCUE_OVERLAP_RATIO,
+            "duplicate_seconds": RESCUE_DUPLICATE_SECONDS,
+            "min_gap_seconds": RESCUE_MIN_GAP_SECONDS,
+            "gap_pad_seconds": RESCUE_GAP_PAD_SECONDS,
+            "gap_coverage": "first-pass-lines-cross-window-v2",
         }
         payload["repeat_collapse"] = "phrase-run-4-to-3-v1"
         if hotwords:
             payload["hotwords"] = hotwords
         if rescue_decode is _CURRENT_RESCUE_DECODE:
-            payload["rescue_decode"] = f"batched-{RESCUE_BATCH_SIZE}-whole-window-v1"
+            payload["rescue_decode"] = (
+                f"batched-{RESCUE_BATCH_SIZE}-gap-triggered-window-context-no-hotwords-v5"
+            )
     text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -239,8 +244,76 @@ def _needs_rescue(speech_seconds: float, dbfs: float) -> bool:
     return speech_seconds < RESCUE_MAX_VAD_SECONDS and dbfs >= RESCUE_MIN_DBFS
 
 
+def _rescue_spans(
+    audio, window: ClipWindow, segments: list[dict[str, Any]]
+) -> list[ClipWindow]:
+    """Return audible, uncovered spans that deserve a no-VAD second pass.
+
+    Looking only at total VAD speech misses the important case where loud dialogue in
+    one part of a 30-second window hides quiet dialogue elsewhere in that same window.
+    Use the first-pass segment coverage instead, and decode only sufficiently long,
+    non-silent gaps with a little surrounding context.
+    """
+
+    covered: list[tuple[float, float]] = []
+    for segment in segments:
+        start = max(window.start, min(window.end, float(segment.get("start", 0.0))))
+        end = max(window.start, min(window.end, float(segment.get("end", 0.0))))
+        if end <= start:
+            continue
+        if covered and start <= covered[-1][1]:
+            covered[-1] = (covered[-1][0], max(covered[-1][1], end))
+        else:
+            covered.append((start, end))
+
+    gaps: list[tuple[float, float]] = []
+    cursor = window.start
+    for start, end in covered:
+        if start - cursor >= RESCUE_MIN_GAP_SECONDS:
+            gaps.append((cursor, start))
+        cursor = max(cursor, end)
+    if window.end - cursor >= RESCUE_MIN_GAP_SECONDS:
+        gaps.append((cursor, window.end))
+
+    spans: list[ClipWindow] = []
+    for start, end in gaps:
+        probe = ClipWindow(index=window.index, start=start, end=end)
+        if _window_dbfs(audio, probe) < RESCUE_MIN_DBFS:
+            continue
+        padded = ClipWindow(
+            index=window.index,
+            start=max(window.start, start - RESCUE_GAP_PAD_SECONDS),
+            end=min(window.end, end + RESCUE_GAP_PAD_SECONDS),
+        )
+        if spans and padded.start <= spans[-1].end:
+            previous = spans[-1]
+            spans[-1] = ClipWindow(
+                index=window.index,
+                start=previous.start,
+                end=max(previous.end, padded.end),
+            )
+        else:
+            spans.append(padded)
+    return spans
+
+
+def _is_term_echo(text: str, terms: tuple[str, ...] | list[str]) -> bool:
+    """True when a line is nothing but the user's term hints (hallucinated from hotwords)."""
+
+    import re
+
+    if not terms:
+        return False
+    rest = text
+    for term in sorted(terms, key=len, reverse=True):
+        rest = rest.replace(term, "")
+    return not re.sub(r"[\W_]+", "", rest)
+
+
 def _rescue_reject_reason(
-    segment: dict[str, Any], kept: list[dict[str, Any]]
+    segment: dict[str, Any],
+    kept: list[dict[str, Any]],
+    terms: tuple[str, ...] | list[str] = (),
 ) -> str | None:
     """Why a whole-window (no VAD) segment is dropped, or None to keep it."""
 
@@ -249,6 +322,8 @@ def _rescue_reject_reason(
     text = str(segment.get("text", "")).strip()
     if not text:
         return "empty"
+    if _is_term_echo(text, terms):
+        return "term_echo"
     if float(segment.get("no_speech_prob", 0.0)) > RESCUE_MAX_NO_SPEECH:
         return "no_speech"
     if float(segment.get("avg_logprob", 0.0)) < RESCUE_MIN_LOGPROB:
@@ -261,12 +336,30 @@ def _rescue_reject_reason(
         return "generic_phrase"
     start, end = float(segment["start"]), float(segment["end"])
     length = max(end - start, 0.001)
+    # Overlap with all kept lines together: one long rescued line can repeat two
+    # short first-pass lines that each cover less than the threshold.
+    covered = 0.0
+    cursor = start
+    for other in sorted(kept, key=lambda item: float(item["start"])):
+        other_start = max(cursor, float(other["start"]))
+        other_end = min(end, float(other["end"]))
+        if other_end > other_start:
+            covered += other_end - other_start
+            cursor = other_end
+    if covered / length >= RESCUE_OVERLAP_RATIO:
+        return "overlap"
+    normalized = _normalize(text)
     for other in kept:
-        overlap = min(end, float(other["end"])) - max(start, float(other["start"]))
-        if overlap / length >= RESCUE_OVERLAP_RATIO:
-            return "overlap"
-    if kept and _normalize(str(kept[-1].get("text", ""))) == _normalize(text):
-        return "duplicate"
+        other_text = _normalize(str(other.get("text", "")))
+        if not other_text or abs(float(other["start"]) - start) > RESCUE_DUPLICATE_SECONDS:
+            continue
+        # The same line heard twice, possibly with a word more or less
+        # ("어디 가셨지?" / "쌤이 어디 가셨지?").
+        if normalized == other_text or (
+            min(len(normalized), len(other_text)) >= 4
+            and (normalized in other_text or other_text in normalized)
+        ):
+            return "duplicate"
     return None
 
 
@@ -392,6 +485,28 @@ def _window_speech_chunks(
         for chunk in chunks
         if window_start <= chunk["start"] < window_end and chunk["end"] > chunk["start"]
     ]
+
+
+def _window_speech_coverage(
+    chunks: list[dict[str, int]], window: ClipWindow
+) -> list[dict[str, float]]:
+    """Absolute VAD coverage intersecting a window, including boundary crossings."""
+
+    window_start = round(window.start * SAMPLING_RATE)
+    window_end = round(window.end * SAMPLING_RATE)
+    coverage: list[dict[str, float]] = []
+    for chunk in chunks:
+        start = max(window_start, int(chunk["start"]))
+        end = min(window_end, int(chunk["end"]))
+        if end <= start:
+            continue
+        coverage.append(
+            {
+                "start": start / SAMPLING_RATE,
+                "end": end / SAMPLING_RATE,
+            }
+        )
+    return coverage
 
 
 SPEECH_GROUP_GAP_SECONDS = 2.0
@@ -598,6 +713,7 @@ def _merge_checkpoints(
     language_probability = 1.0
     speech_seconds = 0.0
     rescue_windows = 0
+    rescue_intervals = 0
     rescue_kept = 0
     rescue_dropped: dict[str, int] = {}
     for window in windows:
@@ -605,6 +721,7 @@ def _merge_checkpoints(
         rescue = payload.get("rescue") or {}
         if rescue.get("decoded"):
             rescue_windows += 1
+            rescue_intervals += len(rescue.get("intervals") or []) or 1
             rescue_kept += int(rescue.get("kept", 0))
             for reason, count in (rescue.get("dropped") or {}).items():
                 rescue_dropped[reason] = rescue_dropped.get(reason, 0) + int(count)
@@ -673,10 +790,13 @@ def _merge_checkpoints(
             "policy_source": POLICY_SOURCE,
             "rescue_pass": {
                 "windows": rescue_windows,
+                "intervals": rescue_intervals,
                 "kept_segments": rescue_kept,
                 "dropped_segments": rescue_dropped,
                 "max_vad_seconds": RESCUE_MAX_VAD_SECONDS,
                 "min_dbfs": RESCUE_MIN_DBFS,
+                "min_gap_seconds": RESCUE_MIN_GAP_SECONDS,
+                "gap_pad_seconds": RESCUE_GAP_PAD_SECONDS,
             },
         },
         "segments": output_segments,
@@ -944,8 +1064,8 @@ def transcribe(
 
         pipeline = None
 
-        def rescue_decode(rescue_windows: list[ClipWindow]) -> list[dict[str, Any]]:
-            """Decode several whole windows in one GPU batch (2.1x faster than one by one)."""
+        def rescue_decode(rescue_spans: list[ClipWindow]) -> list[dict[str, Any]]:
+            """Decode several suspect spans in one GPU batch."""
 
             nonlocal pipeline
             try:
@@ -957,9 +1077,11 @@ def transcribe(
                     audio,
                     language=config.direction.source,
                     task="transcribe",
-                    **({"hotwords": ", ".join(config.terms)} if config.terms else {}),
+                    # No hotwords here: on quiet audio without VAD, Whisper echoes the
+                    # hint list for the whole window ("서수민, 문쌤" x20 in 실기 영상 F,
+                    # hiding the real quiet lines it otherwise decodes correctly).
                     clip_timestamps=[
-                        {"start": window.start, "end": window.end} for window in rescue_windows
+                        {"start": span.start, "end": span.end} for span in rescue_spans
                     ],
                     batch_size=RESCUE_BATCH_SIZE,
                     without_timestamps=False,
@@ -986,11 +1108,14 @@ def transcribe(
             for window in chunk:
                 check_cancel()
                 local_chunks = _window_speech_chunks(speech_chunks, window)
-                speech_seconds = sum(item["end"] - item["start"] for item in local_chunks)
-                speech_seconds /= SAMPLING_RATE
+                speech_coverage = _window_speech_coverage(speech_chunks, window)
+                speech_seconds = sum(
+                    item["end"] - item["start"] for item in speech_coverage
+                )
                 state: dict[str, Any] = {
                     "window": window,
                     "segments": [],
+                    "speech_coverage": speech_coverage,
                     "language": config.direction.source,
                     "language_probability": 1.0,
                     "used_model": False,
@@ -1010,22 +1135,66 @@ def transcribe(
                     "vad_seconds": round(speech_seconds, 3),
                     "dbfs": round(dbfs, 1),
                 }
-                state["needs_rescue"] = _needs_rescue(speech_seconds, dbfs)
+                # Gaps are measured against the lines the first pass actually wrote,
+                # including lines of the previous window that run into this one.  VAD
+                # coverage is not enough: VAD can mark quiet speech that Whisper then
+                # leaves empty (실기 영상 F 53.5-54.8 s, "우삼겹 덮밥").
+                previous = window.index - 1
+                neighbour = next(
+                    (item["segments"] for item in pending if item["window"].index == previous),
+                    None,
+                )
+                if neighbour is None and previous in checkpoints:
+                    neighbour = checkpoints[previous].get("segments") or []
+                state["first_pass"] = [
+                    segment
+                    for segment in (neighbour or [])
+                    if float(segment["end"]) > window.start
+                ] + list(state["segments"])
+                if _needs_rescue(speech_seconds, dbfs):
+                    rescue_spans = [window]
+                    state["rescue"]["mode"] = "whole_window"
+                else:
+                    rescue_spans = _rescue_spans(audio, window, state["first_pass"])
+                    state["rescue"]["mode"] = "gap_triggered_window_context"
+                state["rescue_spans"] = rescue_spans
+                # Short isolated excerpts can make Whisper miss the very quiet line
+                # that triggered this pass.  Decode the containing 30-second window
+                # for linguistic context, then admit candidates only when they begin
+                # inside one of the audible uncovered spans below.
+                state["rescue_decode_spans"] = [window] if rescue_spans else []
+                state["rescue"]["intervals"] = [
+                    {"start": round(span.start, 3), "end": round(span.end, 3)}
+                    for span in rescue_spans
+                ]
                 pending.append(state)
 
-            rescue_states = [state for state in pending if state["needs_rescue"]]
+            rescue_states = [state for state in pending if state["rescue_spans"]]
             if rescue_states:
-                decoded = rescue_decode([state["window"] for state in rescue_states])
+                decoded = rescue_decode(
+                    [
+                        span
+                        for state in rescue_states
+                        for span in state["rescue_decode_spans"]
+                    ]
+                )
                 for state in rescue_states:
                     window = state["window"]
+                    rescue_spans = state["rescue_spans"]
                     state["used_model"] = True
-                    kept = list(state["segments"])
+                    kept = sorted(
+                        state["first_pass"],
+                        key=lambda item: (float(item["start"]), float(item["end"])),
+                    )
                     dropped: dict[str, int] = {}
                     rescued = 0
                     for candidate in decoded:
-                        if not window.start <= float(candidate["start"]) < window.end:
+                        candidate_start = float(candidate["start"])
+                        if not any(
+                            span.start <= candidate_start < span.end for span in rescue_spans
+                        ):
                             continue
-                        reason = _rescue_reject_reason(candidate, kept)
+                        reason = _rescue_reject_reason(candidate, kept, config.terms)
                         if reason:
                             dropped[reason] = dropped.get(reason, 0) + 1
                             continue

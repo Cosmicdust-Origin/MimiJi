@@ -85,6 +85,8 @@ TRANSLATION_POLICY_VERSION = "direct-ja-ko-v4-compact"
 # are re-translated (never reported as unverifiable), holds survive the upgrade.
 TRANSLATION_PROTOCOL = "compact-v1"
 REVIEW_RETRY_POLICY_VERSION = "review-retry-v4"
+MERGE_POLISH_POLICY_VERSION = "merge-boundary-v2"
+MERGE_POLISH_CHUNK_SIZE = 24
 MAX_TRANSIENT_ATTEMPTS = 3
 MAX_INVALID_OUTPUT_ATTEMPTS = 2
 TRANSIENT_BACKOFF_SECONDS = (5.0, 20.0)
@@ -194,6 +196,67 @@ def _mirror_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 TRANSLATION_SCHEMA_KO_JA: dict[str, Any] = _mirror_schema(TRANSLATION_SCHEMA)
 
+MERGE_POLISH_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "groups": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "raw_ids": _ID_LIST,
+                    "changed": {"type": "boolean"},
+                    "polished_target": {"type": "string"},
+                    "note": {"type": "string"},
+                },
+                "required": ["raw_ids", "changed", "polished_target", "note"],
+            },
+        }
+    },
+    "required": ["groups"],
+}
+
+MERGE_VERIFY_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "groups": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "raw_ids": _ID_LIST,
+                    "meaning_preserved": {"type": "boolean"},
+                    "register_preserved": {"type": "boolean"},
+                    "no_omitted_meaning": {"type": "boolean"},
+                    "no_added_meaning": {"type": "boolean"},
+                    "core_action_preserved": {"type": "boolean"},
+                    "boundary_natural": {"type": "boolean"},
+                    "accepted": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                },
+                "required": [
+                    "raw_ids",
+                    "meaning_preserved",
+                    "register_preserved",
+                    "no_omitted_meaning",
+                    "no_added_meaning",
+                    "core_action_preserved",
+                    "boundary_natural",
+                    "accepted",
+                    "reason",
+                ],
+            },
+        }
+    },
+    "required": ["groups"],
+}
+
 
 def _schema_for(language_pair: str) -> dict[str, Any]:
     return TRANSLATION_SCHEMA_KO_JA if language_pair == "ko-ja" else TRANSLATION_SCHEMA
@@ -212,21 +275,31 @@ SYSTEM_INSTRUCTIONS = "\n".join(
         "(고칠 것이 없으면 원문 그대로)을 먼저 적으십시오. 그 외에는 고친 줄만 적습니다.",
         "4. 단어 치환, 조사·어미 치환, 이전 번역 재사용, 일부 단어만 남기기, "
         "말줄임표로 가리기, 요약을 금지합니다. ko에 일본어 가나나 한자를 남기지 마십시오.",
-        "5. 화자 관계와 높임말을 문맥에서 추론하여 경어, 반말, 호칭, 감정의 강도를 "
+        "5. 원문의 머뭇거림, 말 고침, 잘못 시작한 구절이나 문맥상 지시 대상이 없는 "
+        "비의미적 필러를 한국어 문장 성분으로 억지로 직역하지 마십시오. 발화의 명제와 "
+        "의도를 보존하는 범위에서 자연스럽게 정리하십시오. 다만 감정, 강조, 태도, 호흡, "
+        "대화 순서에 기능하는 표현은 삭제하지 말고 자연스러운 한국어로 살리십시오.",
+        "6. 핵심 사건 구조를 일반적인 근접어로 뭉개지 마십시오. 행위자, 대상, 수혜자, "
+        "방향, 부착·분리, 상태 변화, 부정과 양태를 보존하고 문맥에 맞는 구체 동사를 "
+        "고르십시오.",
+        "7. 번역 후 원문의 필러와 어순 때문에 매달린 절이나 비문이 생기지 않았는지 "
+        "한국어 화자의 관점에서 다시 읽으십시오. 자연스럽게 다듬는다는 이유로 정보, "
+        "관계, 말투를 줄이거나 추가하지 마십시오.",
+        "8. 화자 관계와 높임말을 문맥에서 추론하여 경어, 반말, 호칭, 감정의 강도를 "
         "일관되게 보존하십시오. previous_register_summary가 있으면 이어서 따르십시오.",
-        "6. 짧더라도 말이 담긴 줄(대답, 감탄, 거절, 요청, 고통·놀람의 표현 등)은 번역하십시오. "
+        "9. 짧더라도 말이 담긴 줄(대답, 감탄, 거절, 요청, 고통·놀람의 표현 등)은 번역하십시오. "
         "짧다는 이유만으로 omitted에 넣지 마십시오.",
-        "7. omitted에는 실제 말이 없는 줄만 code와 함께 넣으십시오: moan(신음·탄식), "
+        "10. omitted에는 실제 말이 없는 줄만 code와 함께 넣으십시오: moan(신음·탄식), "
         "breath(호흡), laugh(웃음), noise(비발화 소리), hallucination(음성 근거 없는 상투어·환각), "
         "endcard(엔드카드 상투어). 단어가 들어 있는 줄은 번역하거나 review에 넣으십시오.",
-        "8. おやすみ, ご視聴ありがとうございました, ありがとうございました는 음성 근거가 "
+        "11. おやすみ, ご視聴ありがとうございました, ありがとうございました는 음성 근거가 "
         "불확실하면 hallucination으로 생략하거나 review로 넣으십시오. "
         "근거 없는 '잘 자'를 만들지 마십시오.",
-        "9. 확신할 수 없는 줄은 review에 가장 가능성 높은 ko와 구체적인 note를 적으십시오. "
+        "12. 확신할 수 없는 줄은 review에 가장 가능성 높은 ko와 구체적인 note를 적으십시오. "
         "ko에 '(검토)', '[검토]', '대사 확인 필요' 같은 표식을 넣지 마십시오.",
-        "10. 인접한 줄이 한 문장 또는 한 자막 큐로 이어져야 하면 뒤쪽 줄의 raw_id를 "
+        "13. 인접한 줄이 한 문장 또는 한 자막 큐로 이어져야 하면 뒤쪽 줄의 raw_id를 "
         "merge_with_previous에 넣으십시오.",
-        "11. register_summary에는 이 구간의 화자 관계, 서로의 호칭과 말투(존댓말·반말)를 "
+        "14. register_summary에는 이 구간의 화자 관계, 서로의 호칭과 말투(존댓말·반말)를 "
         "1~3문장으로 요약하십시오. 다음 구간 번역의 일관성에 사용됩니다.",
     ]
 )
@@ -249,27 +322,39 @@ SYSTEM_INSTRUCTIONS_KO_JA = "\n".join(
         "고친 뒤 그 뜻으로 번역하고, 소리 나는 대로 가타카나로 옮기지 마십시오. 한자어는 "
         "직역보다 일본어에서 자연스러운 말을 고르고(예: 역모→謀反), 같은 단어는 작품 전체에서 "
         "같은 말로 옮기십시오.",
-        "5. 화자 관계와 높임말을 문맥에서 추론하여 です・ます체와 반말(タメ口), 경어, 호칭"
+        "5. 원문의 머뭇거림, 말 고침, 잘못 시작한 구절이나 문맥상 지시 대상이 없는 '저거', "
+        "'그', '이제 뭐' 같은 비의미적 필러를 일본어 문장 성분으로 억지로 직역하지 마십시오. "
+        "발화의 명제와 의도를 보존하는 범위에서 자연스럽게 정리하십시오. 다만 감정, 강조, "
+        "태도, 호흡, 대화 순서에 기능하는 표현은 삭제하지 말고 자연스러운 일본어로 "
+        "살리십시오.",
+        "6. 핵심 사건 구조를 일반적인 근접어로 뭉개지 마십시오. 행위자, 대상, 수혜자, "
+        "방향, 부착·분리, 상태 변화, 부정과 양태를 보존하고 문맥에 맞는 구체 동사를 "
+        "고르십시오. 예를 들어 서로 붙은 깻잎을 '떼어주다'는 단순한 取ってあげる가 아니라 "
+        "剥がしてあげる처럼 분리 동작을 살리십시오.",
+        "7. 번역 후 원문의 필러와 어순 때문에 매달린 절이나 비문이 생기지 않았는지 "
+        "일본어 화자의 관점에서 다시 읽으십시오. 자연스럽게 다듬는다는 이유로 정보, 관계, "
+        "말투를 줄이거나 추가하지 마십시오.",
+        "8. 화자 관계와 높임말을 문맥에서 추론하여 です・ます체와 반말(タメ口), 경어, 호칭"
         "(さん・くん・ちゃん・様 등), 감정의 강도를 일관되게 보존하십시오. "
         "previous_register_summary가 있으면 이어서 따르십시오.",
-        "6. 짧더라도 말이 담긴 줄(대답, 감탄, 거절, 요청, 고통·놀람의 표현 등)은 번역하십시오. "
+        "9. 짧더라도 말이 담긴 줄(대답, 감탄, 거절, 요청, 고통·놀람의 표현 등)은 번역하십시오. "
         "짧다는 이유만으로 omitted에 넣지 마십시오.",
-        "7. omitted에는 실제 말이 없는 줄만 code와 함께 넣으십시오: moan(신음·탄식), "
+        "10. omitted에는 실제 말이 없는 줄만 code와 함께 넣으십시오: moan(신음·탄식), "
         "breath(호흡), laugh(웃음), noise(비발화 소리), hallucination(음성 근거 없는 상투어·환각), "
         "endcard(엔드카드 상투어). 단어가 들어 있는 줄은 번역하거나 review에 넣으십시오.",
-        "8. '시청해 주셔서 감사합니다', '구독과 좋아요' 같은 영상 끝 인사는 음성 근거가 "
+        "11. '시청해 주셔서 감사합니다', '구독과 좋아요' 같은 영상 끝 인사는 음성 근거가 "
         "불확실하면 hallucination으로 생략하거나 review로 넣으십시오.",
-        "9. 확신할 수 없는 줄은 review에 가장 가능성 높은 ja와 구체적인 note를 적으십시오. "
+        "12. 확신할 수 없는 줄은 review에 가장 가능성 높은 ja와 구체적인 note를 적으십시오. "
         "ja에 '(要確認)', '(검토)' 같은 표식을 넣지 마십시오.",
-        "10. 인접한 줄이 한 문장 또는 한 자막 큐로 이어져야 하면 뒤쪽 줄의 raw_id를 "
+        "13. 인접한 줄이 한 문장 또는 한 자막 큐로 이어져야 하면 뒤쪽 줄의 raw_id를 "
         "merge_with_previous에 넣으십시오.",
-        "11. register_summary에는 이 구간의 화자 관계, 서로의 호칭과 말투(경어·반말)를 "
+        "14. register_summary에는 이 구간의 화자 관계, 서로의 호칭과 말투(경어·반말)를 "
         "1~3문장으로 요약하십시오. 다음 구간 번역의 일관성에 사용됩니다.",
     ]
 )
 
 GLOSSARY_INSTRUCTIONS = (
-    "12. glossary_terms는 사용자가 알려 준 이 작품의 고유명사와 용어입니다. 원문에 이와 "
+    "15. glossary_terms는 사용자가 알려 준 이 작품의 고유명사와 용어입니다. 원문에 이와 "
     "비슷하게 들리는 단어가 있으면 음성 인식 오류로 보고 이 표기로 고치십시오. 같은 용어는 "
     "작품 전체에서 같은 번역어로 옮기십시오."
 )
@@ -1486,6 +1571,526 @@ def _request_items(
                     min(attempt - 1, len(TRANSIENT_BACKOFF_SECONDS) - 1)
                 ]
                 _wait_or_cancel(delay, cancel_event)
+
+
+def _run_quality_stage(
+    *,
+    provider: TranslationProvider,
+    config: JobConfig,
+    manifest: JobManifest,
+    paths: JobPaths,
+    prompt: str,
+    label: str,
+    target_ids: list[int],
+    schema_path: Path,
+    output_path: Path,
+    cancel_event: threading.Event | None,
+    sessions: SessionManager | None,
+) -> dict[str, Any]:
+    """Run a structured quality-gate request and account for it like translation."""
+
+    context = _ACTIVE_RUN.get()
+    phase = context.phase if context else None
+    attempt = 0
+    while True:
+        attempt += 1
+        session_id = sessions.resume_id() if sessions is not None else None
+        started = time.monotonic()
+        try:
+            with _counting_active_time(manifest):
+                result = provider.run(
+                    prompt=prompt,
+                    model=config.model,
+                    reasoning_effort=config.reasoning_effort,
+                    speed_mode=config.speed_mode,
+                    schema_path=schema_path,
+                    output_path=output_path,
+                    workdir=paths.state_dir,
+                    cancel_event=cancel_event,
+                    session_id=session_id,
+                    persistent=sessions is not None,
+                    on_phase=phase,
+                )
+        except ProviderCancelled:
+            raise
+        except ProviderError as exc:
+            elapsed = time.monotonic() - started
+            if sessions is not None:
+                if exc.kind == ProviderFailureKind.CONTENT_REFUSAL:
+                    sessions.retire_session(exc.session_id or session_id, "refused", label)
+                elif session_id and exc.kind not in {
+                    ProviderFailureKind.AUTH_REQUIRED,
+                    ProviderFailureKind.USAGE_LIMIT,
+                }:
+                    sessions.retire("resume_failed")
+            _bump_metrics(manifest, exc.metrics or {}, repair=False)
+            event = _provider_event_base(
+                config,
+                batch_index=label,
+                attempt=attempt,
+                target_ids=target_ids,
+                elapsed_seconds=elapsed,
+            )
+            event.update(
+                {
+                    "stage": label,
+                    "outcome": "failure",
+                    "failure_kind": exc.kind.value,
+                    "message": str(exc),
+                    "returncode": exc.returncode,
+                    "raw_response": exc.raw_response,
+                    "stdout": exc.stdout,
+                    "stderr": exc.stderr,
+                    "session_id": exc.session_id or session_id,
+                    "session_mode": exc.session_mode,
+                    "metrics": exc.metrics,
+                    "request_finished_at": _now(),
+                }
+            )
+            _append_provider_event(paths.provider_events, event)
+            if exc.kind != ProviderFailureKind.TRANSIENT_ERROR or attempt >= MAX_TRANSIENT_ATTEMPTS:
+                raise
+            delay = TRANSIENT_BACKOFF_SECONDS[
+                min(attempt - 1, len(TRANSIENT_BACKOFF_SECONDS) - 1)
+            ]
+            _wait_or_cancel(delay, cancel_event)
+            continue
+
+        elapsed = time.monotonic() - started
+        if sessions is not None:
+            sessions.per_turn_usage(result.session_id, result.metrics)
+            sessions.record(result.session_id, label, result.metrics)
+        _bump_metrics(manifest, result.metrics, repair=False)
+        event = _provider_event_base(
+            config,
+            batch_index=label,
+            attempt=attempt,
+            target_ids=target_ids,
+            elapsed_seconds=elapsed,
+        )
+        event.update(
+            {
+                "stage": label,
+                "outcome": "success",
+                "session_id": result.session_id,
+                "session_mode": result.session_mode,
+                "metrics": result.metrics,
+                "request_finished_at": _now(),
+            }
+        )
+        _append_provider_event(paths.provider_events, event)
+        return result.payload
+
+
+def _merge_polish_fingerprint(config: JobConfig, group: dict[str, Any]) -> str:
+    source = {
+        "policy_version": MERGE_POLISH_POLICY_VERSION,
+        "execution_profile": translation_profile(config),
+        "language_pair": config.language_pair,
+        "terms": config.terms,
+        "raw_ids": group["raw_ids"],
+        "source_parts": group["source_parts"],
+        "target_parts": group["target_parts"],
+        "source_text": group["source_text"],
+        "initial_target": group["initial_target"],
+    }
+    canonical = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _merge_context(groups: list[dict[str, Any]], index: int) -> dict[str, Any]:
+    def view(group: dict[str, Any] | None) -> dict[str, Any] | None:
+        if group is None:
+            return None
+        return {
+            "raw_ids": group["raw_ids"],
+            "source_text": group["source_text"],
+            "target_text": group["initial_target"],
+        }
+
+    return {
+        "previous": view(groups[index - 1] if index > 0 else None),
+        "next": view(groups[index + 1] if index + 1 < len(groups) else None),
+    }
+
+
+def _merge_polish_prompt(
+    config: JobConfig,
+    groups: list[dict[str, Any]],
+    *,
+    register_summary: str,
+) -> str:
+    direction = config.direction
+    payload = {
+        "work_title": config.code,
+        "language_direction": direction.label,
+        "source_language": direction.source_name,
+        "target_language": direction.target_name,
+        "register_summary": register_summary,
+        "glossary_terms": config.terms,
+        "groups": groups,
+    }
+    return "\n".join(
+        [
+            "귀하는 직접 번역이 끝난 병합 자막의 문장 경계만 교정하는 전문 번역자입니다.",
+            "이 단계는 새 번역이나 요약이 아니라 raw_id별 번역을 합친 경계의 교정입니다.",
+            "",
+            "다음 원칙을 반드시 준수하십시오.",
+            "1. 입력된 모든 raw_ids 그룹을 정확히 한 번씩 같은 순서로 반환하십시오.",
+            "2. 주어, 대상, 수혜자, 동작, 방향, 부착·분리, 상태 변화, 부정, 양태, "
+            "경어와 감정 강도를 추가하거나 삭제하지 마십시오.",
+            "3. raw_id 경계 때문에 반복된 주어·말머리·지시어·종결 표현만 문장 전체에 맞게 "
+            "정리하고, 비의미적 머뭇거림은 자연스럽게 정리하십시오. 태도·강조 기능이 있으면 "
+            "보존하십시오.",
+            "4. raw_id별 번역이 같은 결론을 두 번 말하면 하나의 자연스러운 종결로 "
+            "합치십시오. 예: '〜って話。その話ですよね？'는 '〜って話ですよね？'처럼 "
+            "경계에서 중복된 결론을 제거하십시오.",
+            "5. 일반적인 근접어로 핵심 동작을 뭉개지 말고 initial_target의 구체적인 의미를 "
+            "유지하십시오.",
+            "6. 앞뒤 context는 말투와 연결을 판단하는 용도이며 번역 결과에 합치지 마십시오.",
+            "7. 확실히 더 자연스럽고 의미가 동일할 때만 changed=true와 polished_target을 "
+            "반환하십시오. 불확실하거나 고칠 필요가 없으면 changed=false로 하고 "
+            "polished_target에 initial_target을 그대로 반환하십시오.",
+            "",
+            "입력 데이터:",
+            json.dumps(payload, ensure_ascii=False, indent=2),
+        ]
+    )
+
+
+def _merge_verify_prompt(config: JobConfig, groups: list[dict[str, Any]]) -> str:
+    payload = {
+        "work_title": config.code,
+        "language_direction": config.direction.label,
+        "groups": groups,
+    }
+    return "\n".join(
+        [
+            "귀하는 병합 자막 교정 결과의 독립적인 의미 보존 검증자입니다.",
+            "번역문을 다시 쓰지 말고 각 raw_ids 그룹을 판정만 하십시오.",
+            "",
+            "다음 조건을 모두 만족할 때만 accepted=true로 판정하십시오.",
+            "1. source_text의 명제와 initial_target의 핵심 의미가 polished_target에 모두 "
+            "남아 있습니다.",
+            "2. 새로운 정보, 주어, 관계, 동작, 감정 또는 단정이 추가되지 않았습니다.",
+            "3. 경어·반말·호칭·감정 강도가 보존되었습니다.",
+            "4. 행위자, 대상, 수혜자, 방향, 부착·분리, 상태 변화, 부정과 양태가 보존되었습니다.",
+            "5. 목표 언어 문장으로 더 자연스럽고, raw_id 경계에서 생긴 반복이나 비문만 "
+            "정리했습니다.",
+            "6. 같은 결론을 반복하는 '〜って話。その話ですよね？' 같은 경계 중복이 "
+            "남아 있지 않습니다. 남아 있으면 boundary_natural=false와 accepted=false입니다.",
+            "하나라도 확신할 수 없으면 accepted=false로 하고 reason에 구체적으로 적으십시오.",
+            "",
+            "입력 데이터:",
+            json.dumps(payload, ensure_ascii=False, indent=2),
+        ]
+    )
+
+
+def _response_groups(payload: object) -> dict[tuple[int, ...], dict[str, Any]] | None:
+    if not isinstance(payload, dict) or not isinstance(payload.get("groups"), list):
+        return None
+    result: dict[tuple[int, ...], dict[str, Any]] = {}
+    for raw in payload["groups"]:
+        if not isinstance(raw, dict) or not isinstance(raw.get("raw_ids"), list):
+            return None
+        raw_ids = raw["raw_ids"]
+        if any(isinstance(item, bool) or not isinstance(item, int) for item in raw_ids):
+            return None
+        key = tuple(int(item) for item in raw_ids)
+        if not key or key in result:
+            return None
+        result[key] = dict(raw)
+    return result
+
+
+def _polish_merged_cues(
+    *,
+    provider: TranslationProvider,
+    config: JobConfig,
+    manifest: JobManifest,
+    paths: JobPaths,
+    segments: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    register_summary: str,
+    cancel_event: threading.Event | None,
+    progress: ProgressCallback | None,
+) -> dict[str, Any]:
+    """Polish only merged cue boundaries; verified results never replace raw-id decisions."""
+
+    from .subtitles import group_translated_decisions
+
+    all_groups = group_translated_decisions(
+        segments,
+        decisions,
+        respect_speakers=config.diarization_enabled,
+        language_pair=config.language_pair,
+    )
+    candidates: list[dict[str, Any]] = []
+    for index, group in enumerate(all_groups):
+        if len(group["raw_ids"]) < 2:
+            continue
+        candidates.append({**group, "context": _merge_context(all_groups, index)})
+
+    try:
+        previous = load_json(paths.merged_cue_polish) if paths.merged_cue_polish.is_file() else {}
+    except (OSError, ValueError, TypeError):
+        previous = {}
+    previous_by_fingerprint = {
+        str(record.get("fingerprint")): dict(record)
+        for record in previous.get("records") or []
+        if isinstance(record, dict) and record.get("fingerprint")
+    }
+    profile = translation_profile(config)
+    records: list[dict[str, Any]] = []
+    pending_polish: list[dict[str, Any]] = []
+    for group in candidates:
+        fingerprint = _merge_polish_fingerprint(config, group)
+        cached = previous_by_fingerprint.get(fingerprint)
+        if cached and cached.get("status") in {"accepted", "unchanged", "rejected", "held"}:
+            records.append(cached)
+            continue
+        record = {
+            "fingerprint": fingerprint,
+            "policy_version": MERGE_POLISH_POLICY_VERSION,
+            "language_pair": config.language_pair,
+            "raw_ids": list(group["raw_ids"]),
+            "source_text": str(group["source_text"]),
+            "initial_target": str(group["initial_target"]),
+            "polished_target": str((cached or {}).get("polished_target") or ""),
+            "status": str((cached or {}).get("status") or "pending"),
+            "reason": str((cached or {}).get("reason") or ""),
+            "execution_profile": profile,
+            "processed_at": str((cached or {}).get("processed_at") or ""),
+        }
+        records.append(record)
+        if record["status"] == "verification_pending" and record["polished_target"]:
+            continue
+        pending_polish.append(group)
+
+    def save() -> dict[str, Any]:
+        data = {
+            "policy_version": MERGE_POLISH_POLICY_VERSION,
+            "language_pair": config.language_pair,
+            "records": records,
+            "updated_at": _now(),
+        }
+        atomic_write_json(paths.merged_cue_polish, data)
+        return data
+
+    if not candidates:
+        return save()
+    if not getattr(provider, "supports_quality_gate", False):
+        for record in records:
+            if record["status"] not in {"accepted", "unchanged", "rejected", "held"}:
+                record.update(
+                    status="failed",
+                    reason="선택한 번역 제공자가 구조화된 병합 문장 교정을 지원하지 않습니다.",
+                    processed_at=_now(),
+                )
+        return save()
+
+    record_by_ids = {tuple(record["raw_ids"]): record for record in records}
+    polish_schema_path = paths.state_dir / "merge_polish_schema.json"
+    verify_schema_path = paths.state_dir / "merge_verify_schema.json"
+    atomic_write_json(polish_schema_path, MERGE_POLISH_SCHEMA)
+    atomic_write_json(verify_schema_path, MERGE_VERIFY_SCHEMA)
+    for offset in range(0, len(pending_polish), MERGE_POLISH_CHUNK_SIZE):
+        chunk = pending_polish[offset : offset + MERGE_POLISH_CHUNK_SIZE]
+        chunk_no = offset // MERGE_POLISH_CHUNK_SIZE
+        prompt_groups = [
+            {
+                "raw_ids": group["raw_ids"],
+                "source_parts": group["source_parts"],
+                "initial_target_parts": group["target_parts"],
+                "source_text": group["source_text"],
+                "initial_target": group["initial_target"],
+                "context": group["context"],
+            }
+            for group in chunk
+        ]
+        prompt = _merge_polish_prompt(
+            config,
+            prompt_groups,
+            register_summary=register_summary,
+        )
+        atomic_write_text(
+            paths.batches_dir / f"merge_polish_{chunk_no:04d}_request.txt", prompt
+        )
+        _log(
+            progress,
+            f"병합된 자막 문장 {len(chunk)}개를 {config.provider}/{config.model}로 다듬습니다.",
+        )
+        expected = {tuple(int(item) for item in group["raw_ids"]) for group in chunk}
+        try:
+            payload = _run_quality_stage(
+                provider=provider,
+                config=config,
+                manifest=manifest,
+                paths=paths,
+                prompt=prompt,
+                label=f"merge_polish_{chunk_no:04d}",
+                target_ids=[raw_id for group in chunk for raw_id in group["raw_ids"]],
+                schema_path=polish_schema_path,
+                output_path=paths.batches_dir / f"merge_polish_{chunk_no:04d}_output.json",
+                cancel_event=cancel_event,
+                sessions=None,
+            )
+            returned = _response_groups(payload)
+            if returned is None or set(returned) != expected:
+                raise ProviderError(
+                    "병합 문장 교정 응답의 raw_id 그룹이 입력과 일치하지 않습니다.",
+                    kind=ProviderFailureKind.INVALID_OUTPUT,
+                )
+        except ProviderCancelled:
+            raise
+        except ProviderError as exc:
+            status = (
+                "held"
+                if exc.kind in {
+                    ProviderFailureKind.CONTENT_REFUSAL,
+                    ProviderFailureKind.INVALID_OUTPUT,
+                }
+                else "failed"
+            )
+            for key in expected:
+                record_by_ids[key].update(
+                    status=status,
+                    reason=str(exc),
+                    failure_kind=exc.kind.value,
+                    processed_at=_now(),
+                )
+            save()
+            continue
+
+        processed_at = _now()
+        residue = config.direction.residue
+        for key, result in returned.items():
+            record = record_by_ids[key]
+            changed = result.get("changed") is True
+            candidate = str(result.get("polished_target") or "").strip()
+            note = str(result.get("note") or "").strip()
+            if not changed:
+                record.update(
+                    status="unchanged",
+                    polished_target=record["initial_target"],
+                    reason=note,
+                    processed_at=processed_at,
+                )
+            elif not candidate or residue.search(candidate):
+                record.update(
+                    status="rejected",
+                    polished_target=candidate,
+                    reason="교정문이 비어 있거나 목표 자막에 원문 문자가 남았습니다.",
+                    processed_at=processed_at,
+                )
+            else:
+                record.update(
+                    status="verification_pending",
+                    polished_target=candidate,
+                    reason=note,
+                    processed_at=processed_at,
+                )
+        save()
+
+    verification_pending = [
+        record for record in records if record.get("status") == "verification_pending"
+    ]
+    for offset in range(0, len(verification_pending), MERGE_POLISH_CHUNK_SIZE):
+        chunk = verification_pending[offset : offset + MERGE_POLISH_CHUNK_SIZE]
+        chunk_no = offset // MERGE_POLISH_CHUNK_SIZE
+        prompt_groups = [
+            {
+                "raw_ids": record["raw_ids"],
+                "source_text": record["source_text"],
+                "initial_target": record["initial_target"],
+                "polished_target": record["polished_target"],
+            }
+            for record in chunk
+        ]
+        prompt = _merge_verify_prompt(config, prompt_groups)
+        atomic_write_text(
+            paths.batches_dir / f"merge_verify_{chunk_no:04d}_request.txt", prompt
+        )
+        _log(progress, f"병합 문장 교정 {len(chunk)}개를 독립적으로 의미 검증합니다.")
+        expected = {tuple(int(item) for item in record["raw_ids"]) for record in chunk}
+        try:
+            payload = _run_quality_stage(
+                provider=provider,
+                config=config,
+                manifest=manifest,
+                paths=paths,
+                prompt=prompt,
+                label=f"merge_verify_{chunk_no:04d}",
+                target_ids=[raw_id for record in chunk for raw_id in record["raw_ids"]],
+                schema_path=verify_schema_path,
+                output_path=paths.batches_dir / f"merge_verify_{chunk_no:04d}_output.json",
+                cancel_event=cancel_event,
+                sessions=None,
+            )
+            returned = _response_groups(payload)
+            if returned is None or set(returned) != expected:
+                raise ProviderError(
+                    "병합 문장 의미 검증 응답의 raw_id 그룹이 입력과 일치하지 않습니다.",
+                    kind=ProviderFailureKind.INVALID_OUTPUT,
+                )
+        except ProviderCancelled:
+            raise
+        except ProviderError as exc:
+            status = (
+                "held"
+                if exc.kind in {
+                    ProviderFailureKind.CONTENT_REFUSAL,
+                    ProviderFailureKind.INVALID_OUTPUT,
+                }
+                else "failed"
+            )
+            for key in expected:
+                record_by_ids[key].update(
+                    status=status,
+                    reason=str(exc),
+                    failure_kind=exc.kind.value,
+                    verified_at=_now(),
+                )
+            save()
+            continue
+
+        verified_at = _now()
+        for key, result in returned.items():
+            checks = (
+                result.get("meaning_preserved") is True,
+                result.get("register_preserved") is True,
+                result.get("no_omitted_meaning") is True,
+                result.get("no_added_meaning") is True,
+                result.get("core_action_preserved") is True,
+                result.get("boundary_natural") is True,
+                result.get("accepted") is True,
+            )
+            record_by_ids[key].update(
+                status="accepted" if all(checks) else "rejected",
+                reason=str(result.get("reason") or "").strip(),
+                verification=dict(result),
+                verified_at=verified_at,
+            )
+        save()
+
+    data = save()
+    accepted = sum(record.get("status") == "accepted" for record in records)
+    unchanged = sum(record.get("status") == "unchanged" for record in records)
+    fallback = len(records) - accepted - unchanged
+    manifest.stats["merge_polish"] = {
+        "groups": len(records),
+        "accepted": accepted,
+        "unchanged": unchanged,
+        "fallback": fallback,
+    }
+    manifest.save()
+    _log(
+        progress,
+        f"병합 문장 교정 완료: 적용 {accepted}개, 수정 불필요 {unchanged}개, "
+        f"초안 유지 {fallback}개.",
+    )
+    return data
 
 
 def _make_repair_prompt(
@@ -2915,6 +3520,26 @@ def translate(
             manifest.set_status(JobStatus.PARTIAL_REVIEW, error=str(review_error))
             _retract_published(config, str(review_error))
             raise review_error
+        if progress_value:
+            progress_value(0.9, "병합된 자막의 문장 경계를 확인합니다.")
+        register_summary = " ".join(
+            dict.fromkeys(
+                lane.register_summary.strip()
+                for lane in lanes
+                if lane.register_summary and lane.register_summary.strip()
+            )
+        )
+        _polish_merged_cues(
+            provider=provider,
+            config=config,
+            manifest=manifest,
+            paths=paths,
+            segments=segments,
+            decisions=decisions,
+            register_summary=register_summary,
+            cancel_event=run_cancel,
+            progress=progress,
+        )
         manifest.stats.pop("current_stage", None)
         manifest.set_status(JobStatus.TRANSLATED)
         if progress_value:

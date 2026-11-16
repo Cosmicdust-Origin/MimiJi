@@ -119,19 +119,47 @@ def _wrap_japanese(text: str, limit: int = 28) -> str:
     clean = re.sub(r"\s+", "", text).strip()
     if len(clean) <= limit:
         return clean
-    split = min(len(clean), limit)
-    for punctuation in "。！？、」』":
-        # The final character is never a split point (it would leave an empty line).
-        candidate = clean.rfind(punctuation, max(0, limit - 8), min(len(clean) - 1, limit + 6))
-        if candidate >= 0:
-            split = candidate + 1
-            break
+    split = _japanese_split_point(clean, limit)
     head, rest = clean[:split], clean[split:]
     if not rest:
         # Splitting at the final punctuation would leave an empty second line, which
         # writes a blank line inside the SRT cue (strict players end the cue there).
         return clean
     return f"{head}\n{rest}"
+
+
+_JA_PUNCTUATION = "。！？、」』…"
+_JA_PARTICLES = "をにがはでともへや"
+_HIRAGANA = re.compile("[ぁ-ゟ]")
+
+
+def _japanese_split_point(clean: str, limit: int) -> int:
+    """Pick a line break near the middle: after punctuation, else after a particle.
+
+    A particle only counts when the next character starts a new word (not hiragana),
+    so 取って|あげる is never split but 葉を|取って is. The last character is never a
+    split point, since that would leave an empty second line.
+    """
+    target = len(clean) / 2 if len(clean) <= limit * 2 else limit
+
+    def best(positions: list[int]) -> int | None:
+        fitting = [p for p in positions if p <= limit and len(clean) - p <= limit]
+        pool = fitting or [p for p in positions if p <= limit + 6]
+        return min(pool, key=lambda p: abs(p - target)) if pool else None
+
+    punctuation = [
+        i + 1 for i, char in enumerate(clean[:-1]) if char in _JA_PUNCTUATION and i >= 4
+    ]
+    particles = [
+        i + 1
+        for i, char in enumerate(clean[:-1])
+        if char in _JA_PARTICLES and i >= 4 and not _HIRAGANA.match(clean[i + 1])
+    ]
+    for positions, reach in ((punctuation, 6), (particles, 8)):
+        choice = best([p for p in positions if abs(p - target) <= reach])
+        if choice is not None:
+            return choice
+    return min(len(clean) - 1, max(1, round(target)))
 
 
 def _write_tsv(path: Path, headers: list[str], rows: list[list[Any]]) -> None:
@@ -142,18 +170,17 @@ def _write_tsv(path: Path, headers: list[str], rows: list[list[Any]]) -> None:
     atomic_write_text(path, buffer.getvalue())
 
 
-def _build_cues(
+def group_translated_decisions(
     segments: list[dict[str, Any]],
     decisions: list[dict[str, Any]],
     *,
     respect_speakers: bool = False,
     language_pair: str = "ja-ko",
-) -> list[Cue]:
+) -> list[dict[str, Any]]:
+    """Build the exact translated raw-id groups later used as subtitle cues."""
+
     # Internally ``ja`` is the source-language line and ``ko`` the translation.
     reverse = language_pair == "ko-ja"
-    wrap_source, wrap_target = (
-        (_wrap_korean, _wrap_japanese) if reverse else (_wrap_japanese, _wrap_korean)
-    )
     source_joiner, target_joiner = (" ", "") if reverse else ("", " ")
     by_id = {int(item["id"]): item for item in segments}
     groups: list[dict[str, Any]] = []
@@ -183,9 +210,22 @@ def _build_cues(
                     "end": float(segment["end"]),
                     "ja_parts": [str(decision["ja_fixed"]).strip()],
                     "ko_parts": [str(decision["ko"]).strip()],
+                    "source_parts": [
+                        {"raw_id": raw_id, "text": str(decision["ja_fixed"]).strip()}
+                    ],
+                    "target_parts": [
+                        {"raw_id": raw_id, "text": str(decision["ko"]).strip()}
+                    ],
                     "raw_ids": [raw_id],
                     "speaker": speaker,
                 }
+            )
+        if merge:
+            group["source_parts"].append(
+                {"raw_id": raw_id, "text": str(decision["ja_fixed"]).strip()}
+            )
+            group["target_parts"].append(
+                {"raw_id": raw_id, "text": str(decision["ko"]).strip()}
             )
 
     for index, group in enumerate(groups):
@@ -205,11 +245,49 @@ def _build_cues(
                     if float(group["end"]) <= float(group["start"]):
                         group["end"] = float(group["start"]) + 0.5
 
+    for group in groups:
+        group["source_text"] = collapse_repeats(
+            source_joiner.join(part for part in group["ja_parts"] if part)
+        )
+        group["initial_target"] = collapse_repeats(
+            target_joiner.join(part for part in group["ko_parts"] if part)
+        ).strip()
+    return groups
+
+
+def _build_cues(
+    segments: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    *,
+    respect_speakers: bool = False,
+    language_pair: str = "ja-ko",
+    polishes: dict[tuple[int, ...], dict[str, Any]] | None = None,
+) -> list[Cue]:
+    reverse = language_pair == "ko-ja"
+    wrap_source, wrap_target = (
+        (_wrap_korean, _wrap_japanese) if reverse else (_wrap_japanese, _wrap_korean)
+    )
+    groups = group_translated_decisions(
+        segments,
+        decisions,
+        respect_speakers=respect_speakers,
+        language_pair=language_pair,
+    )
+
     cues: list[Cue] = []
     for index, group in enumerate(groups, start=1):
-        ja = collapse_repeats(source_joiner.join(part for part in group["ja_parts"] if part))
-        ko = collapse_repeats(target_joiner.join(part for part in group["ko_parts"] if part))
-        ko = ko.strip()
+        ja = str(group["source_text"])
+        ko = str(group["initial_target"])
+        polish = (polishes or {}).get(tuple(int(item) for item in group["raw_ids"]))
+        if (
+            polish
+            and polish.get("status") == "accepted"
+            and polish.get("language_pair") == language_pair
+            and polish.get("source_text") == ja
+            and polish.get("initial_target") == ko
+            and str(polish.get("polished_target") or "").strip()
+        ):
+            ko = str(polish["polished_target"]).strip()
         cues.append(
             Cue(
                 index=index,
@@ -384,6 +462,7 @@ def _report_text(
     status: str,
     decisions: list[dict[str, Any]],
     cues: list[Cue] | None = None,
+    merge_polish: dict[str, Any] | None = None,
 ) -> str:
     meta = raw.get("meta", {})
     diarization = meta.get("diarization", {})
@@ -421,10 +500,60 @@ def _report_text(
 
 {translation_history}
 
+## 병합 문장 경계 교정
+
+{_merge_polish_report(merge_polish)}
+
 ## 구간별 대사 분포
 
 {_coverage_text(raw, decisions, cues or [])}
 """
+
+
+def _merge_polish_report(data: dict[str, Any] | None) -> str:
+    records = list((data or {}).get("records") or [])
+    if not records:
+        return "- 교정 대상 없음"
+    labels = {
+        "accepted": "검증 통과·적용",
+        "unchanged": "수정 불필요",
+        "rejected": "검증 불통과·초안 유지",
+        "held": "보류·초안 유지",
+        "failed": "실행 실패·초안 유지",
+    }
+    counts: dict[str, int] = {}
+    for record in records:
+        status = str(record.get("status") or "failed")
+        counts[status] = counts.get(status, 0) + 1
+    lines = [
+        "- "
+        + ", ".join(
+            f"{labels.get(status, status)} {count}개" for status, count in sorted(counts.items())
+        )
+    ]
+    for record in records:
+        raw_ids = [int(item) for item in record.get("raw_ids") or []]
+        if not raw_ids:
+            continue
+        raw_range = str(raw_ids[0]) if len(raw_ids) == 1 else f"{raw_ids[0]}–{raw_ids[-1]}"
+        profile = normalize_translation_profile(record.get("execution_profile"))
+        profile_text = (
+            f'{profile["provider"]} / {profile["model"]} · '
+            f'{profile["reasoning_effort"]} / {profile["speed_mode"]}'
+            if profile
+            else "실행 프로필 미기록"
+        )
+        status = str(record.get("status") or "failed")
+        lines.append(
+            f'- raw_id {raw_range}: {labels.get(status, status)} · {profile_text} · '
+            f'{record.get("processed_at") or "처리 시각 미기록"}'
+        )
+        if status == "accepted":
+            lines.append(f'  - 초안: {record.get("initial_target", "")}')
+            lines.append(f'  - 교정: {record.get("polished_target", "")}')
+        elif record.get("reason"):
+            lines.append(f'  - 사유: {record["reason"]}')
+    return "\n".join(lines)
 
 
 COVERAGE_BUCKET_SECONDS = 600
@@ -464,8 +593,11 @@ def _coverage_text(
     lines = []
     if rescue:
         dropped = rescue.get("dropped_segments") or {}
+        scope = f"30초 창 {rescue.get('windows', 0)}개"
+        if rescue.get("intervals") is not None:
+            scope += f" / 의심 공백 {rescue.get('intervals', 0)}개"
         lines.append(
-            f"- 음성 감지 누락 구조: 다시 전사한 30초 구간 {rescue.get('windows', 0)}개, "
+            f"- 음성 감지 누락 구조: 다시 전사한 {scope}, "
             f"살린 줄 {rescue.get('kept_segments', 0)}개, 버린 줄 {sum(dropped.values())}개 "
             f"({', '.join(f'{key} {value}' for key, value in sorted(dropped.items())) or '-'})"
         )
@@ -658,6 +790,17 @@ def build_and_validate(config: JobConfig) -> ValidationResult:
     raw = load_json(paths.raw)
     segments = list(raw.get("segments", []))
     decision_data = load_json(paths.decisions)
+    try:
+        merge_polish = (
+            load_json(paths.merged_cue_polish) if paths.merged_cue_polish.is_file() else {}
+        )
+    except (OSError, ValueError, TypeError):
+        merge_polish = {}
+    polish_records = {
+        tuple(int(raw_id) for raw_id in record.get("raw_ids") or []): record
+        for record in merge_polish.get("records") or []
+        if isinstance(record, dict) and record.get("raw_ids")
+    }
     if decision_data.get("partial") or manifest.status == JobStatus.TRANSLATION_PARTIAL:
         refused_ids = [int(item) for item in decision_data.get("refused_raw_ids", [])]
         message = (
@@ -732,6 +875,7 @@ def build_and_validate(config: JobConfig) -> ValidationResult:
                 validation=None,
                 status=status,
                 decisions=decisions,
+                merge_polish=merge_polish,
             ),
         )
         manifest.stats.update({"unmapped_segments": unmapped, "review_segments": len(review_items)})
@@ -750,6 +894,7 @@ def build_and_validate(config: JobConfig) -> ValidationResult:
         decisions,
         respect_speakers=config.diarization_enabled,
         language_pair=config.language_pair,
+        polishes=polish_records,
     )
     atomic_write_text(
         staged_ja,
@@ -779,6 +924,7 @@ def build_and_validate(config: JobConfig) -> ValidationResult:
             status="완료" if validation.ok else "검증 실패",
             decisions=decisions,
             cues=cues,
+            merge_polish=merge_polish,
         ),
     )
     manifest.stats.update(

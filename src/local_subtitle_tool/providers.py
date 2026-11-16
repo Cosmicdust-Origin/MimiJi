@@ -314,6 +314,8 @@ def find_codex_session_log(thread_id: str) -> Path | None:
 
 class TranslationProvider:
     name: str
+    # The provider accepts additional structured-output stages after direct translation.
+    supports_quality_gate: bool = True
     # Providers that can keep one conversation across batches (see translator).
     supports_sessions: bool = False
     # Providers whose stdout is a JSONL event stream that can be parsed while running.

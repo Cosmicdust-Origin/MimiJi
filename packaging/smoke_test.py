@@ -137,7 +137,10 @@ def main() -> int:
                 dict(normal, LOCALAPPDATA=str(root / "LocalAppData")),
                 timeout=900,
             )
-            raw = output / ".subtitle_job" / "SMOKE-001_merged_raw_ja.json"
+            raw_matches = list(
+                (output / ".subtitle_job").rglob("SMOKE-001_merged_raw_ja.json")
+            )
+            raw = raw_matches[0] if len(raw_matches) == 1 else Path()
             check(result.returncode == 0 and raw.is_file(), "normal: packaged transcription ran")
             if raw.is_file():
                 payload = json.loads(raw.read_text(encoding="utf-8"))

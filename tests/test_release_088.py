@@ -5,11 +5,16 @@ from __future__ import annotations
 import json
 import unittest
 
+import numpy as np
+
 from local_subtitle_tool.repetition import collapse_repeats
 from local_subtitle_tool.subtitles import _coverage_text
 from local_subtitle_tool.transcriber import (
+    SAMPLING_RATE,
+    ClipWindow,
     _needs_rescue,
     _rescue_reject_reason,
+    _rescue_spans,
     _settings_fingerprint,
 )
 
@@ -72,6 +77,25 @@ class RescueTests(unittest.TestCase):
 
     def test_new_policy_has_its_own_fingerprint(self) -> None:
         self.assertNotEqual(_settings_fingerprint(), _settings_fingerprint(legacy=True))
+
+    def test_audible_internal_gap_is_rescued_even_when_window_has_speech(self) -> None:
+        audio = np.zeros(30 * SAMPLING_RATE, dtype=np.float32)
+        audio[9 * SAMPLING_RATE : 21 * SAMPLING_RATE] = 0.03
+        window = ClipWindow(index=0, start=0.0, end=30.0)
+        segments = [_segment("앞 대사", 1.0, 6.0), _segment("뒤 대사", 24.0, 29.0)]
+
+        spans = _rescue_spans(audio, window, segments)
+
+        self.assertEqual(len(spans), 1)
+        self.assertLessEqual(spans[0].start, 6.0)
+        self.assertGreaterEqual(spans[0].end, 24.0)
+
+    def test_genuinely_silent_internal_gap_is_not_rescued(self) -> None:
+        audio = np.zeros(30 * SAMPLING_RATE, dtype=np.float32)
+        window = ClipWindow(index=0, start=0.0, end=30.0)
+        segments = [_segment("앞 대사", 1.0, 6.0), _segment("뒤 대사", 24.0, 29.0)]
+
+        self.assertEqual(_rescue_spans(audio, window, segments), [])
 
 
 class CoverageTests(unittest.TestCase):

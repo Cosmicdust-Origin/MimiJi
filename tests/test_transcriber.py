@@ -20,6 +20,7 @@ from local_subtitle_tool.transcriber import (
     _resolve_runtime,
     _speech_groups,
     _window_speech_chunks,
+    _window_speech_coverage,
     transcribe,
 )
 
@@ -66,6 +67,10 @@ class ClipWindowTests(unittest.TestCase):
         )
         self.assertEqual(_window_speech_chunks(chunks, windows[1]), [])
         self.assertEqual(_window_speech_chunks(chunks, windows[2]), [])
+        self.assertEqual(
+            _window_speech_coverage(chunks, windows[1]),
+            [{"start": 30.0, "end": 31.0}],
+        )
 
     def test_close_speech_chunks_are_decoded_as_one_contiguous_group(self) -> None:
         chunks = [
@@ -240,6 +245,51 @@ class CheckpointResumeTests(unittest.TestCase):
                     (JobPaths(config).clips_dir / "000000.json").read_text(encoding="utf-8")
                 )
                 self.assertEqual(clip0["segments"], [])
+
+    def test_audible_gap_gets_no_vad_rescue_without_duplicating_existing_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self._config(root, "TEST-009")
+            probe, cpu, model_cache, _decode = self._environment(root, duration=30.0)
+            audio = np.zeros(30 * SAMPLING_RATE, dtype=np.float32)
+            audio[9 * SAMPLING_RATE : 21 * SAMPLING_RATE] = 0.03
+            with (
+                probe,
+                cpu,
+                model_cache,
+                patch("local_subtitle_tool.transcriber._decode_audio", return_value=audio),
+                patch(
+                    "local_subtitle_tool.transcriber._detect_speech",
+                    return_value=_speech((1.0, 6.0), (24.0, 29.0)),
+                ),
+                patch("faster_whisper.WhisperModel") as whisper_model,
+                patch("faster_whisper.BatchedInferencePipeline") as batched_pipeline,
+            ):
+                whisper_model.return_value.transcribe.side_effect = [
+                    (iter([_segment(0.0, 1.0, "앞 대사")]), _info()),
+                    (iter([_segment(0.0, 1.0, "뒤 대사")]), _info()),
+                ]
+                batched_pipeline.return_value.transcribe.return_value = (
+                    iter([_segment(10.0, 12.0, "작은 대사")]),
+                    _info(),
+                )
+
+                transcribe(config)
+
+            rescue_call = batched_pipeline.return_value.transcribe.call_args
+            self.assertEqual(
+                rescue_call.kwargs["clip_timestamps"],
+                [{"start": 0.0, "end": 30.0}],
+            )
+            raw = json.loads(JobPaths(config).raw.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["text"] for item in raw["segments"]],
+                ["앞 대사", "작은 대사", "뒤 대사"],
+            )
+            rescued = [item for item in raw["segments"] if item.get("rescue")]
+            self.assertEqual([item["text"] for item in rescued], ["작은 대사"])
+            self.assertEqual(raw["meta"]["rescue_pass"]["windows"], 1)
+            self.assertEqual(raw["meta"]["rescue_pass"]["intervals"], 1)
 
     def test_raw_is_not_reused_after_source_video_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

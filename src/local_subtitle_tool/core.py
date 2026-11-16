@@ -458,6 +458,10 @@ class JobPaths:
         return self.state_dir / "decisions.json"
 
     @property
+    def merged_cue_polish(self) -> Path:
+        return self.state_dir / "merged_cue_polish.json"
+
+    @property
     def provider_events(self) -> Path:
         return self.state_dir / "provider_events.jsonl"
 

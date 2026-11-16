@@ -29,7 +29,9 @@ def main() -> int:
     counter.write_text(str(index + 1))
     step = plan[min(index, len(plan) - 1)]
 
-    prompt = sys.stdin.read()
+    sys.stdout.reconfigure(encoding="utf-8")
+    # The parent writes UTF-8 text (with Windows newlines), whatever the console code page.
+    prompt = sys.stdin.buffer.read().decode("utf-8").replace("\r\n", "\n")
     target_ids: list[int] = []
     if "입력 데이터:\n" in prompt:
         payload = json.loads(prompt.split("입력 데이터:\n", 1)[1])

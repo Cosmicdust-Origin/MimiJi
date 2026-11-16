@@ -1,10 +1,10 @@
 # MimiJi
 
-일본어 영상에서 한국어 자막을 만드는 Windows 데스크톱 앱입니다. 음성 인식(전사)은 내 PC의 GPU에서
+일본어 영상에서 한국어 자막을, 한국어 영상에서 일본어 자막을 만드는 Windows 데스크톱 앱입니다. 음성 인식(전사)은 내 PC의 GPU에서
 처리하고, 번역은 내가 구독 중인 ChatGPT(Codex CLI) 또는 Claude(Claude Code) 계정으로 합니다.
 API 키를 쓰지 않으며, 앱은 로그인 정보를 저장하지 않습니다.
 
-*MimiJi is a Windows desktop app that turns Japanese video into Korean subtitles. Speech is
+*MimiJi is a Windows desktop app that turns Japanese video into Korean subtitles (and Korean video into Japanese subtitles). Speech is
 transcribed locally with faster-whisper large-v3 on your NVIDIA GPU; translation runs through
 the official Codex CLI (ChatGPT subscription) or Claude Code (Claude subscription) you are
 already signed in to. No API keys, no server, nothing uploaded except the transcript text you
@@ -12,7 +12,8 @@ send to the translation model.*
 
 ## 무엇을 하나요
 
-- 영상 → 일본어 전사(30초 구간 체크포인트, 끊겨도 이어하기) → 한국어 번역 → SRT 자막과 작업 보고서
+- 영상 → 전사(30초 구간 체크포인트, 끊겨도 이어하기) → 번역 → SRT 자막과 작업 보고서.
+  언어 방향은 일본어 → 한국어, 한국어 → 일본어 중에서 고릅니다.
 - 음성 감지(VAD)가 배경음에 묻힌 대사를 놓친 구간은 VAD 없이 다시 전사해 살립니다.
 - 번역은 줄 번호(raw_id) 단위로 검증합니다. 빠진 줄, 한국어에 남은 일본어, 확신이 낮은 줄은 다시
   요청하고, 끝까지 애매한 줄은 "번역 검토" 화면에서 채택·수정·삭제할 수 있습니다.

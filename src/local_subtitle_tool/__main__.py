@@ -28,6 +28,12 @@ def _add_job_arguments(parser: argparse.ArgumentParser) -> None:
         help="번역 모델 사고 수준",
     )
     parser.add_argument(
+        "--language-pair",
+        choices=["ja-ko", "ko-ja"],
+        default="ja-ko",
+        help="ja-ko: 일본어 음성 → 한국어 자막, ko-ja: 한국어 음성 → 일본어 자막",
+    )
+    parser.add_argument(
         "--speed-mode",
         choices=("standard", "fast"),
         default="standard",
@@ -63,6 +69,7 @@ def _config_from_args(args: argparse.Namespace) -> JobConfig:
         model=model,
         reasoning_effort=args.reasoning_effort,
         speed_mode=args.speed_mode,
+        language_pair=args.language_pair,
         batch_size=args.batch_size,
         accelerator=args.accelerator,
         device_index=args.device_index,

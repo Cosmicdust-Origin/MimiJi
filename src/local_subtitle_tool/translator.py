@@ -25,6 +25,7 @@ from .core import (
     normalize_translation_profile,
     translation_profile,
 )
+from .languages import direction as get_direction
 from .policy import should_drop_segment
 from .providers import (
     ProviderCancelled,
@@ -113,6 +114,8 @@ VOCAL_OMIT_CODES = frozenset({"moan", "breath", "laugh", "noise"})
 _VOCAL_CHARACTERS = set(
     "あぁいぃうぅえぇおぉんっーはふへほひハフヘホヒアァイィウゥエェオォンッ"
     "ゃゅょャュョ～〜…・、。,.!?！？ 　♡♥"
+    # Korean moans, breaths and laughter
+    "아앗앙어엇엉으응음읏읍하학핫흐흑흣헉헐후휴흡ㅎㅋㅠㅜ~"
 )
 _RESIDUE_PATTERN = re.compile(r"[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿]")
 
@@ -179,6 +182,23 @@ TRANSLATION_SCHEMA: dict[str, Any] = {
 }
 
 
+def _mirror_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """The Korean-to-Japanese response schema: translations carry ``ja``, fixes ``ko``."""
+
+    text = json.dumps(schema, ensure_ascii=False)
+    text = text.replace('"ja_fixes"', '"@FIXES@"').replace('"ja"', '"@SRC@"')
+    text = text.replace('"ko"', '"ja"').replace('"@SRC@"', '"ko"')
+    text = text.replace('"@FIXES@"', '"ko_fixes"')
+    return json.loads(text)
+
+
+TRANSLATION_SCHEMA_KO_JA: dict[str, Any] = _mirror_schema(TRANSLATION_SCHEMA)
+
+
+def _schema_for(language_pair: str) -> dict[str, Any]:
+    return TRANSLATION_SCHEMA_KO_JA if language_pair == "ko-ja" else TRANSLATION_SCHEMA
+
+
 SYSTEM_INSTRUCTIONS = "\n".join(
     [
         "귀하는 일본어 음성 인식 결과를 보정하고 한국어 자막으로 직접 번역하는 전문 번역자입니다.",
@@ -211,6 +231,39 @@ SYSTEM_INSTRUCTIONS = "\n".join(
     ]
 )
 
+SYSTEM_INSTRUCTIONS_KO_JA = "\n".join(
+    [
+        "귀하는 한국어 음성 인식 결과를 보정하고 일본어 자막으로 직접 번역하는 전문 번역자입니다.",
+        "",
+        "다음 원칙을 반드시 준수하십시오.",
+        "1. target_raw_ids의 모든 raw_id를 translations, omitted, review 중 정확히 한 곳에만 "
+        "한 번씩 넣으십시오. 문맥용 항목은 반환하지 마십시오.",
+        "2. translations에는 실제 발화를 자연스러운 일본어로 직접 번역한 ja만 적으십시오.",
+        "3. 음성 인식이 틀렸다고 판단해 한국어를 고친 줄은 ko_fixes에 보정한 한국어를 적으십시오. "
+        "ko_fix_required_raw_ids에 있는 raw_id는 번역한다면 반드시 ko_fixes에 보정문"
+        "(고칠 것이 없으면 원문 그대로)을 먼저 적으십시오. 그 외에는 고친 줄만 적습니다.",
+        "4. 단어 치환, 이전 번역 재사용, 일부 단어만 남기기, 말줄임표로 가리기, 요약을 "
+        "금지합니다. ja에 한글을 남기지 마십시오. 고유명사는 일본어 표기(가타카나 등)로 "
+        "옮기십시오.",
+        "5. 화자 관계와 높임말을 문맥에서 추론하여 です・ます체와 반말(タメ口), 경어, 호칭"
+        "(さん・くん・ちゃん・様 등), 감정의 강도를 일관되게 보존하십시오. "
+        "previous_register_summary가 있으면 이어서 따르십시오.",
+        "6. 짧더라도 말이 담긴 줄(대답, 감탄, 거절, 요청, 고통·놀람의 표현 등)은 번역하십시오. "
+        "짧다는 이유만으로 omitted에 넣지 마십시오.",
+        "7. omitted에는 실제 말이 없는 줄만 code와 함께 넣으십시오: moan(신음·탄식), "
+        "breath(호흡), laugh(웃음), noise(비발화 소리), hallucination(음성 근거 없는 상투어·환각), "
+        "endcard(엔드카드 상투어). 단어가 들어 있는 줄은 번역하거나 review에 넣으십시오.",
+        "8. '시청해 주셔서 감사합니다', '구독과 좋아요' 같은 영상 끝 인사는 음성 근거가 "
+        "불확실하면 hallucination으로 생략하거나 review로 넣으십시오.",
+        "9. 확신할 수 없는 줄은 review에 가장 가능성 높은 ja와 구체적인 note를 적으십시오. "
+        "ja에 '(要確認)', '(검토)' 같은 표식을 넣지 마십시오.",
+        "10. 인접한 줄이 한 문장 또는 한 자막 큐로 이어져야 하면 뒤쪽 줄의 raw_id를 "
+        "merge_with_previous에 넣으십시오.",
+        "11. register_summary에는 이 구간의 화자 관계, 서로의 호칭과 말투(경어·반말)를 "
+        "1~3문장으로 요약하십시오. 다음 구간 번역의 일관성에 사용됩니다.",
+    ]
+)
+
 REVIEW_RETRY_INSTRUCTIONS = "\n".join(
     [
         "",
@@ -227,7 +280,10 @@ REVIEW_RETRY_INSTRUCTIONS = "\n".join(
 
 
 # Whisper writes laughter as a symbol rather than a sound.
-LAUGH_NOTATIONS = frozenset({"笑", "(笑)", "（笑）", "w", "ｗ", "www", "ｗｗｗ"})
+LAUGH_NOTATIONS = frozenset(
+    {"笑", "(笑)", "（笑）", "w", "ｗ", "www", "ｗｗｗ"}
+    | {"ㅋㅋ", "ㅋㅋㅋ", "ㅎㅎ", "ㅎㅎㅎ", "(웃음)"}
+)
 # A Whisper repetition loop this extreme is never real dialogue (e.g. 怪我のうううう… x100,
 # compression 24.8): the model spent 8+ minutes reasoning about one such line.
 EXTREME_COMPRESSION = 6.0
@@ -299,7 +355,9 @@ def _make_prompt(
     context_size: int,
     previous_review: dict[int, dict[str, Any]] | None = None,
     register_summary: str | None = None,
+    direction: str = "ja-ko",
 ) -> str:
+    reverse = direction == "ko-ja"
     index_by_id = {int(item["id"]): index for index, item in enumerate(all_segments)}
     target_start = index_by_id[target_ids[0]]
     target_end = index_by_id[target_ids[-1]] + 1
@@ -310,7 +368,7 @@ def _make_prompt(
     payload: dict[str, Any] = {
         "work_code": code,
         "target_raw_ids": target_ids,
-        "ja_fix_required_raw_ids": [
+        ("ko_fix_required_raw_ids" if reverse else "ja_fix_required_raw_ids"): [
             raw_id for raw_id in target_ids if raw_id in by_id and _low_confidence(by_id[raw_id])
         ],
         "context_segments": context,
@@ -321,14 +379,14 @@ def _make_prompt(
     }
     if register_summary:
         payload["previous_register_summary"] = register_summary
-    instructions = SYSTEM_INSTRUCTIONS
+    instructions = SYSTEM_INSTRUCTIONS_KO_JA if reverse else SYSTEM_INSTRUCTIONS
     if previous_review is not None:
         instructions += "\n" + REVIEW_RETRY_INSTRUCTIONS
         payload["previous_review"] = [
             {
                 "raw_id": raw_id,
-                "ja_fixed": str(item.get("ja_fixed") or ""),
-                "ko": str(item.get("ko") or ""),
+                ("ko_fixed" if reverse else "ja_fixed"): str(item.get("ja_fixed") or ""),
+                ("ja" if reverse else "ko"): str(item.get("ko") or ""),
                 "reason": str(item.get("reason") or ""),
             }
             for raw_id, item in sorted(previous_review.items())
@@ -398,10 +456,12 @@ def _batch_fingerprint(
         "reasoning_effort": config.reasoning_effort,
         "speed_mode": config.speed_mode,
         "policy_version": TRANSLATION_POLICY_VERSION,
-        "schema": TRANSLATION_SCHEMA,
+        "schema": _schema_for(config.language_pair),
         "target_ids": target_ids,
         "prompt": prompt,
     }
+    if config.language_pair != "ja-ko":
+        source["direction"] = config.language_pair
     if stage != "batch":
         source["stage"] = stage
         source["review_policy_version"] = REVIEW_RETRY_POLICY_VERSION
@@ -881,6 +941,7 @@ class _RunContext:
     segments_by_id: dict[int, dict[str, Any]] | None = None
     register_summary: str | None = None
     held_streak: int = 0
+    direction: str = "ja-ko"
 
 
 _ACTIVE_RUN: ContextVar[_RunContext | None] = ContextVar("mimiji_active_run", default=None)
@@ -925,6 +986,28 @@ def _check_item(raw_item: object) -> dict[str, Any]:
     return item
 
 
+def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Korean-to-Japanese response keys mapped to the internal (source, target) names."""
+
+    def rows(key: str) -> list[dict[str, Any]]:
+        value = payload.get(key)
+        return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+    result = dict(payload)
+    result["translations"] = [
+        {"raw_id": item.get("raw_id"), "ko": item.get("ja")} for item in rows("translations")
+    ]
+    result["ja_fixes"] = [
+        {"raw_id": item.get("raw_id"), "ja": item.get("ko")} for item in rows("ko_fixes")
+    ]
+    result["review"] = [
+        {"raw_id": item.get("raw_id"), "ko": item.get("ja"), "note": item.get("note")}
+        for item in rows("review")
+    ]
+    result.pop("ko_fixes", None)
+    return result
+
+
 def _expand_compact(
     payload: dict[str, Any], expected_ids: list[int]
 ) -> tuple[dict[str, Any], set[int], list[str]]:
@@ -936,6 +1019,10 @@ def _expand_compact(
 
     context = _ACTIVE_RUN.get()
     segments = (context.segments_by_id if context else None) or {}
+    pair = context.direction if context else "ja-ko"
+    if pair == "ko-ja":
+        payload = _canonical_payload(payload)
+    residue = get_direction(pair).residue
     problems: list[str] = []
     rejected: set[int] = set()
 
@@ -970,10 +1057,17 @@ def _expand_compact(
         segment = segments.get(raw_id)
         if segment is not None and _low_confidence(segment) and raw_id not in ja_fixes:
             rejected.add(raw_id)
-            problems.append(f"raw_id {raw_id}는 인식 신뢰도가 낮아 ja_fixes에 보정문이 필요합니다.")
-        if _RESIDUE_PATTERN.search(ko):
+            problems.append(
+                f"raw_id {raw_id}는 인식 신뢰도가 낮아 "
+                f"{'ko_fixes' if pair == 'ko-ja' else 'ja_fixes'}에 보정문이 필요합니다."
+            )
+        if residue.search(ko):
             rejected.add(raw_id)
-            problems.append(f"raw_id {raw_id}의 ko에 일본어 가나나 한자가 남아 있습니다.")
+            problems.append(
+                f"raw_id {raw_id}의 ja에 한글이 남아 있습니다."
+                if pair == "ko-ja"
+                else f"raw_id {raw_id}의 ko에 일본어 가나나 한자가 남아 있습니다."
+            )
         items.append(
             {
                 "raw_id": raw_id,
@@ -1387,6 +1481,7 @@ def _make_repair_prompt(
     context_size: int,
     problems: list[str],
     previous_review: dict[int, dict[str, Any]] | None = None,
+    direction: str = "ja-ko",
 ) -> str:
     base = _make_prompt(
         code=code,
@@ -1394,6 +1489,7 @@ def _make_repair_prompt(
         target_ids=target_ids,
         context_size=context_size,
         previous_review=previous_review,
+        direction=direction,
     )
     instructions = REPAIR_INSTRUCTIONS.replace(
         "{problems}", "\n".join(f"- {item}" for item in problems[:20])
@@ -1832,13 +1928,18 @@ def _user_resolution(
     }
 
 
-def _korean_problem(ko_value: str) -> str | None:
-    from .subtitles import FORBIDDEN_MARKERS, JAPANESE_RESIDUE_PATTERN
+def _korean_problem(ko_value: str, language_pair: str = "ja-ko") -> str | None:
+    from .subtitles import FORBIDDEN_MARKERS
 
+    spec = get_direction(language_pair)
     if not ko_value:
-        return "한국어 번역이 비어 있습니다."
-    if JAPANESE_RESIDUE_PATTERN.search(ko_value):
-        return "한국어 번역에 일본어 가나나 한자가 남아 있습니다."
+        return f"{spec.target_name} 번역이 비어 있습니다."
+    if spec.residue.search(ko_value):
+        return (
+            "일본어 번역에 한글이 남아 있습니다."
+            if language_pair == "ko-ja"
+            else "한국어 번역에 일본어 가나나 한자가 남아 있습니다."
+        )
     if any(marker in ko_value for marker in FORBIDDEN_MARKERS):
         return "한국어 번역에 검토 표식을 넣을 수 없습니다."
     return None
@@ -1853,7 +1954,7 @@ def save_manual_translation(
         raise ValueError(f"raw_id {raw_id}를 원본 전사에서 찾을 수 없습니다.")
     ja_value = " ".join(ja_fixed.split()) or str(by_id[raw_id].get("text", "")).strip()
     ko_value = " ".join(ko.split())
-    problem = _korean_problem(ko_value)
+    problem = _korean_problem(ko_value, config.language_pair)
     if problem:
         raise ValueError(problem)
     resolution = _user_resolution(
@@ -1908,7 +2009,8 @@ def accept_model_translations(
     skipped: list[int] = []
     for raw_id, item in sorted(pending.items()):
         ko_value = " ".join(str(item.get("ko") or "").split())
-        if item["kind"] != "review" or _korean_problem(ko_value) or raw_id not in by_id:
+        problem = _korean_problem(ko_value, config.language_pair)
+        if item["kind"] != "review" or problem or raw_id not in by_id:
             skipped.append(raw_id)
             continue
         entries.append(
@@ -1953,9 +2055,10 @@ def retry_review_item(
     manifest = JobManifest.load_or_create(config)
     provider = get_provider(config.provider)
     schema_path = paths.state_dir / "translation_schema.json"
-    atomic_write_json(schema_path, TRANSLATION_SCHEMA)
+    atomic_write_json(schema_path, _schema_for(config.language_pair))
     prompt = _make_prompt(
         code=config.code,
+        direction=config.language_pair,
         all_segments=segments,
         target_ids=[raw_id],
         context_size=max(config.context_size * 5, REVIEW_SINGLE_MIN_CONTEXT),
@@ -1965,7 +2068,9 @@ def retry_review_item(
         },
     )
     retry_token = _ACTIVE_RUN.set(
-        _RunContext(sessions=None, phase=None, segments_by_id=by_id)
+        _RunContext(
+            sessions=None, phase=None, segments_by_id=by_id, direction=config.language_pair
+        )
     )
     try:
         items = _request_items(
@@ -2097,6 +2202,7 @@ def _recover_review_items(
             previous = {raw_id: decisions_by_id[raw_id] for raw_id in group}
             prompt = _make_prompt(
                 code=config.code,
+                direction=config.language_pair,
                 all_segments=segments,
                 target_ids=group,
                 context_size=context_size,
@@ -2155,6 +2261,7 @@ def _recover_review_items(
                         repair_prompt=lambda ids, problems, previous=previous, size=context_size: (  # noqa: E501
                             _make_repair_prompt(
                                 code=config.code,
+                                direction=config.language_pair,
                                 all_segments=segments,
                                 target_ids=ids,
                                 context_size=size,
@@ -2280,7 +2387,7 @@ def translate(
 
     paths.batches_dir.mkdir(parents=True, exist_ok=True)
     schema_path = paths.state_dir / "translation_schema.json"
-    atomic_write_json(schema_path, TRANSLATION_SCHEMA)
+    atomic_write_json(schema_path, _schema_for(config.language_pair))
     provider = get_provider(config.provider)
     manifest.stats["current_stage"] = "translation"
     manifest.save()
@@ -2357,6 +2464,7 @@ def translate(
         sessions=sessions,
         phase=progress_phase,
         segments_by_id=segment_by_id,
+        direction=config.language_pair,
     )
     # Lane 0 is the main context; extra lanes get their own session and summary.
     lanes = [run_context] + [
@@ -2364,6 +2472,7 @@ def translate(
             sessions=SessionManager(manifest, config, lane=index) if sessions else None,
             phase=None,
             segments_by_id=segment_by_id,
+            direction=config.language_pair,
         )
         for index in range(1, max(1, parallel_batches))
     ]
@@ -2381,6 +2490,7 @@ def translate(
             batch_path = paths.batches_dir / f"batch_{batch_index:04d}.json"
             prompt = _make_prompt(
                 code=config.code,
+                direction=config.language_pair,
                 all_segments=segments,
                 target_ids=expected_ids,
                 context_size=config.context_size,
@@ -2500,6 +2610,7 @@ def translate(
             send_prompt = (
                 _make_prompt(
                     code=config.code,
+                    direction=config.language_pair,
                     all_segments=segments,
                     target_ids=expected_ids,
                     context_size=config.context_size,
@@ -2540,6 +2651,7 @@ def translate(
                     progress=progress,
                     repair_prompt=lambda ids, problems: _make_repair_prompt(
                         code=config.code,
+                        direction=config.language_pair,
                         all_segments=segments,
                         target_ids=ids,
                         context_size=config.context_size,

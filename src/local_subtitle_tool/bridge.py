@@ -46,6 +46,7 @@ from .installers import (
     open_official_page,
 )
 from .jobs import JobRecord, JobRegistry
+from .languages import DIRECTIONS, direction
 from .model_manager import default_model_cache_dir, download_model, inspect_model_cache
 from .providers import (
     ProviderError,
@@ -245,6 +246,9 @@ class AppBridge(QObject):
         self._codex_sessions = bool(
             self._settings.value("translation/codex_sessions", True, type=bool)
         )
+        self._language_pair = str(self._settings.value("translation/language_pair", "ja-ko"))
+        if self._language_pair not in DIRECTIONS:
+            self._language_pair = "ja-ko"
         self._parallel_batches = max(
             1, min(int(self._settings.value("translation/parallel_batches", 3, type=int)), 4)
         )
@@ -409,6 +413,37 @@ class AppBridge(QObject):
     @Property(list, notify=formChanged)
     def speedOptions(self) -> list[str]:
         return list(SPEED_OPTIONS)
+
+    @Property(str, notify=formChanged)
+    def languagePair(self) -> str:
+        return self._language_pair
+
+    @languagePair.setter
+    def languagePair(self, value: str) -> None:
+        if value in DIRECTIONS and value != self._language_pair:
+            self._language_pair = value
+            self._settings.setValue("translation/language_pair", value)
+            self.formChanged.emit()
+
+    @Property(list, constant=True)
+    def languagePairOptions(self) -> list[str]:
+        return list(DIRECTIONS)
+
+    @Property(list, constant=True)
+    def languagePairLabels(self) -> list[str]:
+        return [item.label for item in DIRECTIONS.values()]
+
+    def _shown_direction(self):
+        config = self._review_config or self._active_config
+        return config.direction if config is not None else direction(self._language_pair)
+
+    @Property(str, notify=reviewChanged)
+    def sourceLanguageName(self) -> str:
+        return self._shown_direction().source_name
+
+    @Property(str, notify=reviewChanged)
+    def targetLanguageName(self) -> str:
+        return self._shown_direction().target_name
 
     @Property(list, notify=formChanged)
     def speedLabels(self) -> list[str]:
@@ -913,6 +948,7 @@ class AppBridge(QObject):
             model=self._model,
             reasoning_effort=self._reasoning,
             speed_mode=self._speed_mode,
+            language_pair=self._language_pair,
             accelerator=self._accelerator,
             compute_type=compute_type,
             cpu_threads=self._cpu_threads or None,
@@ -1013,7 +1049,7 @@ class AppBridge(QObject):
                 registry.upsert(config)
 
             self._post_update(
-                task_title="일본어 음성을 전사하고 있습니다",
+                task_title=f"{config.direction.source_name} 음성을 전사하고 있습니다",
                 task_detail="large-v3가 30초 단위로 체크포인트를 저장합니다.",
                 phase_index=1,
                 overall_progress=0.04,
@@ -1052,7 +1088,7 @@ class AppBridge(QObject):
 
             self._post_update(
                 task_title="자막을 검증하고 있습니다",
-                task_detail="타임코드, 일본어 잔존과 금지 표식을 확인합니다.",
+                task_detail="타임코드, 원문 문자 잔존과 금지 표식을 확인합니다.",
                 phase_index=3,
                 overall_progress=0.96,
                 phase_progress=0.2,
@@ -1199,8 +1235,8 @@ class AppBridge(QObject):
             accepted, _ = accept_model_translations(config, [int(raw_id)])
             if not accepted:
                 raise ValueError(
-                    "이 줄은 채택할 모델 번역이 없거나 일본어가 남아 있습니다. "
-                    "한국어 칸을 고쳐 저장하거나 삭제하십시오."
+                    "이 줄은 채택할 모델 번역이 없거나 원문 문자가 남아 있습니다. "
+                    "번역 자막 칸을 고쳐 저장하거나 삭제하십시오."
                 )
             return f"raw_id {raw_id}: 모델 번역을 채택했습니다."
 
@@ -1222,7 +1258,7 @@ class AppBridge(QObject):
             text = f"모델 번역 {accepted}개를 채택했습니다."
             if skipped:
                 text += (
-                    f" {len(skipped)}개는 채택할 번역이 없거나 일본어가 남아 그대로 두었습니다."
+                    f" {len(skipped)}개는 채택할 번역이 없거나 원문 문자가 남아 그대로 두었습니다."
                 )
             return text
 
@@ -1468,6 +1504,7 @@ class AppBridge(QObject):
         self._model = config.model
         self._reasoning = config.reasoning_effort
         self._speed_mode = config.speed_mode
+        self._language_pair = config.language_pair
         self._accelerator = config.accelerator
         self._cpu_threads = config.cpu_threads or 0
         self._diarization_enabled = config.diarization_enabled

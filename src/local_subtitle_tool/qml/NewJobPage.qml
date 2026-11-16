@@ -215,6 +215,14 @@ Item {
                     columnSpacing: 16
                     rowSpacing: 0
 
+                    Text { text: "언어"; color: Theme.inkSoft; font.family: Theme.family; font.pixelSize: 12 }
+                    ChoiceBox {
+                        Layout.fillWidth: true
+                        model: bridge.languagePairLabels
+                        currentIndex: Math.max(0, bridge.languagePairOptions.indexOf(bridge.languagePair))
+                        enabled: !bridge.busy && !bridge.resumeSettingsMode
+                        onActivated: index => bridge.languagePair = bridge.languagePairOptions[index]
+                    }
                     Text { text: "제공자"; color: Theme.inkSoft; font.family: Theme.family; font.pixelSize: 12 }
                     ChoiceBox {
                         Layout.fillWidth: true

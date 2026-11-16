@@ -137,9 +137,11 @@ def _source_fingerprint(config: JobConfig, duration: float) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _accepted_raw_fingerprints() -> set[str]:
+def _accepted_raw_fingerprints(language: str = "ja") -> set[str]:
     """Finished raw transcriptions from these policies are reused as they are."""
 
+    if language != "ja":
+        return {_settings_fingerprint(language=language)}
     return {
         _settings_fingerprint(),
         _settings_fingerprint(legacy=True),
@@ -179,13 +181,16 @@ _CURRENT_RESCUE_DECODE = object()
 
 
 def _settings_fingerprint(
-    *, legacy: bool = False, rescue_decode: object = _CURRENT_RESCUE_DECODE
+    *,
+    legacy: bool = False,
+    rescue_decode: object = _CURRENT_RESCUE_DECODE,
+    language: str = "ja",
 ) -> str:
     """Transcription policy fingerprint; ``legacy`` gives the 0.8.7 policy (no rescue)."""
 
     payload: dict[str, Any] = {
         "model": MODEL_NAME,
-        "language": "ja",
+        "language": language,
         "decode": decode_options(),
         "vad": dict(DEFAULT_VAD_PARAMETERS),
         "vad_mode": "silero-whole-file-split-per-window",
@@ -586,7 +591,7 @@ def _merge_checkpoints(
 
     merged: list[dict[str, object]] = []
     runtimes: list[dict[str, Any]] = []
-    language = "ja"
+    language = config.direction.source
     language_probability = 1.0
     speech_seconds = 0.0
     rescue_windows = 0
@@ -774,7 +779,7 @@ def transcribe(
         if not windows:
             raise RuntimeError("전사할 오디오 구간이 없습니다.")
         source_fingerprint = _source_fingerprint(config, duration)
-        settings_fingerprint = _settings_fingerprint()
+        settings_fingerprint = _settings_fingerprint(language=config.direction.source)
 
         # Reuse a raw transcription only when it was produced from this exact source
         # file with the current transcription policy.
@@ -805,7 +810,7 @@ def transcribe(
                         source_fingerprint=source_fingerprint,
                         settings_fingerprint=accepted,
                     )
-                    for accepted in _accepted_raw_fingerprints()
+                    for accepted in _accepted_raw_fingerprints(config.direction.source)
                 ):
                     # A finished transcription from the previous policy is kept: making
                     # a new one changes every raw_id and discards the translation.
@@ -913,7 +918,7 @@ def transcribe(
             try:
                 segments, info = ensure_model().transcribe(
                     _group_audio(audio, window, group),
-                    language="ja",
+                    language=config.direction.source,
                     task="transcribe",
                     **options,
                 )
@@ -940,7 +945,7 @@ def transcribe(
                     pipeline = BatchedInferencePipeline(model=ensure_model())
                 segments, _ = pipeline.transcribe(
                     audio,
-                    language="ja",
+                    language=config.direction.source,
                     task="transcribe",
                     clip_timestamps=[
                         {"start": window.start, "end": window.end} for window in rescue_windows
@@ -975,7 +980,7 @@ def transcribe(
                 state: dict[str, Any] = {
                     "window": window,
                     "segments": [],
-                    "language": "ja",
+                    "language": config.direction.source,
                     "language_probability": 1.0,
                     "used_model": False,
                     "speech_seconds": speech_seconds,

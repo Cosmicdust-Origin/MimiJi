@@ -30,7 +30,7 @@ KANA_PATTERN = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
 JAPANESE_RESIDUE_PATTERN = re.compile(
     r"[\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]"
 )
-FORBIDDEN_MARKERS = ("(검토)", "[검토]", "대사 확인 필요", "번역 검토")
+FORBIDDEN_MARKERS = ("(검토)", "[검토]", "대사 확인 필요", "번역 검토", "(要確認)", "【要確認】")
 JUNK_PATTERNS = (
     re.compile(r"^[\s.…⋯]+$"),
     re.compile(r"^[\s.…⋯]+(?:라고|거든요|주세요|예요|야|니까|거예요|입니다)[.!?…\s]*$"),
@@ -121,11 +121,17 @@ def _wrap_japanese(text: str, limit: int = 28) -> str:
         return clean
     split = min(len(clean), limit)
     for punctuation in "。！？、」』":
-        candidate = clean.rfind(punctuation, max(0, limit - 8), min(len(clean), limit + 6))
+        # The final character is never a split point (it would leave an empty line).
+        candidate = clean.rfind(punctuation, max(0, limit - 8), min(len(clean) - 1, limit + 6))
         if candidate >= 0:
             split = candidate + 1
             break
-    return f"{clean[:split]}\n{clean[split:]}"
+    head, rest = clean[:split], clean[split:]
+    if not rest:
+        # Splitting at the final punctuation would leave an empty second line, which
+        # writes a blank line inside the SRT cue (strict players end the cue there).
+        return clean
+    return f"{head}\n{rest}"
 
 
 def _write_tsv(path: Path, headers: list[str], rows: list[list[Any]]) -> None:
@@ -141,7 +147,14 @@ def _build_cues(
     decisions: list[dict[str, Any]],
     *,
     respect_speakers: bool = False,
+    language_pair: str = "ja-ko",
 ) -> list[Cue]:
+    # Internally ``ja`` is the source-language line and ``ko`` the translation.
+    reverse = language_pair == "ko-ja"
+    wrap_source, wrap_target = (
+        (_wrap_korean, _wrap_japanese) if reverse else (_wrap_japanese, _wrap_korean)
+    )
+    source_joiner, target_joiner = (" ", "") if reverse else ("", " ")
     by_id = {int(item["id"]): item for item in segments}
     groups: list[dict[str, Any]] = []
     for decision in decisions:
@@ -194,15 +207,16 @@ def _build_cues(
 
     cues: list[Cue] = []
     for index, group in enumerate(groups, start=1):
-        ja = collapse_repeats("".join(part for part in group["ja_parts"] if part))
-        ko = collapse_repeats(" ".join(part for part in group["ko_parts"] if part)).strip()
+        ja = collapse_repeats(source_joiner.join(part for part in group["ja_parts"] if part))
+        ko = collapse_repeats(target_joiner.join(part for part in group["ko_parts"] if part))
+        ko = ko.strip()
         cues.append(
             Cue(
                 index=index,
                 start=float(group["start"]),
                 end=float(group["end"]),
-                ja=_wrap_japanese(ja),
-                ko=_wrap_korean(ko),
+                ja=wrap_source(ja),
+                ko=wrap_target(ko),
                 raw_ids=list(group["raw_ids"]),
                 speaker=group.get("speaker"),
             )
@@ -247,8 +261,18 @@ def parse_srt(path: Path) -> list[tuple[int, float, float, str]]:
 
 
 def validate_srt_pair(
-    ja_path: Path, ko_path: Path, *, duration: float | None = None
+    ja_path: Path,
+    ko_path: Path,
+    *,
+    duration: float | None = None,
+    language_pair: str = "ja-ko",
 ) -> ValidationResult:
+    """Check a (source SRT, translated SRT) pair; ``ja``/``ko`` name source/target."""
+
+    from .languages import direction
+
+    reverse = language_pair == "ko-ja"
+    residue_pattern = direction(language_pair).residue
     ja_cues = parse_srt(ja_path)
     ko_cues = parse_srt(ko_path)
     timing_mismatches = abs(len(ja_cues) - len(ko_cues))
@@ -267,7 +291,7 @@ def validate_srt_pair(
             if index != ja_index or abs(start - ja_start) > 0.001 or abs(end - ja_end) > 0.001:
                 timing_mismatches += 1
             normalized_ja = re.sub(r"\s+", "", ja_text)
-            if "잘 자" in ko_text and "おやすみ" not in normalized_ja:
+            if not reverse and "잘 자" in ko_text and "おやすみ" not in normalized_ja:
                 goodnight_false_positives += 1
         if end <= start:
             reversals += 1
@@ -275,11 +299,11 @@ def validate_srt_pair(
             overlaps += 1
         if duration is not None and end > duration + 0.05:
             duration_overruns += 1
-        if JAPANESE_RESIDUE_PATTERN.search(ko_text):
+        if residue_pattern.search(ko_text):
             japanese_residue += 1
         if any(marker in ko_text for marker in FORBIDDEN_MARKERS):
             forbidden_markers += 1
-        if any(pattern.search(ko_text.strip()) for pattern in JUNK_PATTERNS):
+        if not reverse and any(pattern.search(ko_text.strip()) for pattern in JUNK_PATTERNS):
             junk_fragments += 1
 
     ok = not any(
@@ -388,7 +412,8 @@ def _report_text(
 - 역전 수: {values.get("reversals", 0)}
 - 타임코드 불일치 수: {values.get("timing_mismatches", 0)}
 - 잘 자 오탐 수: {values.get("goodnight_false_positives", 0)}
-- 한국어 자막의 일본어 잔존 수: {values.get("japanese_residue", 0)}
+- 언어 방향: {config.direction.label}
+- 번역 자막에 남은 원문 문자 수: {values.get("japanese_residue", 0)}
 - 금지 표식 수: {values.get("forbidden_markers", 0)}
 - 번역 찌꺼기 후보 수: {values.get("junk_fragments", 0)}
 
@@ -724,6 +749,7 @@ def build_and_validate(config: JobConfig) -> ValidationResult:
         segments,
         decisions,
         respect_speakers=config.diarization_enabled,
+        language_pair=config.language_pair,
     )
     atomic_write_text(
         staged_ja,
@@ -737,7 +763,9 @@ def build_and_validate(config: JobConfig) -> ValidationResult:
     )
     manifest.set_status(JobStatus.VALIDATING)
     duration = float(raw.get("meta", {}).get("duration", 0.0)) or None
-    validation = validate_srt_pair(staged_ja, staged_ko, duration=duration)
+    validation = validate_srt_pair(
+        staged_ja, staged_ko, duration=duration, language_pair=config.language_pair
+    )
     atomic_write_text(
         staged_report,
         _report_text(

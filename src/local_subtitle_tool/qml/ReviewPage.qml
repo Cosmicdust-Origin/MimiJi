@@ -93,7 +93,7 @@ Item {
                 Text {
                     Layout.fillWidth: true
                     text: "• 채택: '모델 번역'을 그대로 자막에 씁니다.\n"
-                          + "• 수정 저장: '한국어 자막' 칸을 고친 뒤 저장합니다. 일본어 칸은 원문을 고칠 때만 바꾸면 됩니다.\n"
+                          + "• 수정 저장: '" + bridge.targetLanguageName + " 자막' 칸을 고친 뒤 저장합니다. " + bridge.sourceLanguageName + " 칸은 원문을 고칠 때만 바꾸면 됩니다.\n"
                           + "• 삭제: 말이 없는 소리·잡음·잘못 인식된 줄처럼 자막에 넣을 필요가 없을 때 뺍니다.\n"
                           + "• 다시 번역: 모델에 한 번 더 요청합니다."
                     color: Theme.inkSoft
@@ -264,7 +264,7 @@ Item {
                                     Layout.preferredWidth: 2
                                     spacing: 2
                                     Text {
-                                        text: "한국어 자막 (고칠 때만)"
+                                        text: bridge.targetLanguageName + " 자막 (고칠 때만)"
                                         color: Theme.inkFaint
                                         font.family: Theme.family
                                         font.pixelSize: 11
@@ -272,7 +272,7 @@ Item {
                                     LineField {
                                         id: koField
                                         Layout.fillWidth: true
-                                        placeholderText: "자막에 들어갈 한국어 문장"
+                                        placeholderText: "자막에 들어갈 " + bridge.targetLanguageName + " 문장"
                                         text: root.draftValue(row.modelData.raw_id, "ko", row.modelData.ko)
                                         enabled: !bridge.busy
                                         onTextEdited: root.setDraft(row.modelData.raw_id, "ko", text)
@@ -283,7 +283,7 @@ Item {
                                     Layout.preferredWidth: 1
                                     spacing: 2
                                     Text {
-                                        text: "일본어 원문 보정 (선택)"
+                                        text: bridge.sourceLanguageName + " 원문 보정 (선택)"
                                         color: Theme.inkFaint
                                         font.family: Theme.family
                                         font.pixelSize: 11

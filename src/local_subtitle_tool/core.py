@@ -110,12 +110,16 @@ class JobConfig:
     diarization_alignment: str = DiarizationAlignment.BASIC
     diarization_device: str = Accelerator.AUTO
     diarization_srt_labels: bool = False
+    # "ja-ko" (Japanese audio, Korean subtitles) or "ko-ja"; see languages.py.
+    language_pair: str = "ja-ko"
 
     def __post_init__(self) -> None:
         # The work title (historically "code"): used in output file names and reports.
         normalized_code = " ".join(self.code.split())
         if not normalized_code:
             raise ValueError("작품 제목을 입력하십시오.")
+        if self.language_pair not in {"ja-ko", "ko-ja"}:
+            raise ValueError("언어 방향은 ja-ko 또는 ko-ja여야 합니다.")
         provider = self.provider.strip().lower()
         if provider not in {"codex", "claude"}:
             raise ValueError("번역 제공자는 codex 또는 claude여야 합니다.")
@@ -194,13 +198,23 @@ class JobConfig:
             ),
             diarization_device=str(data.get("diarization_device", Accelerator.AUTO)),
             diarization_srt_labels=data.get("diarization_srt_labels", False),
+            language_pair=str(data.get("language_pair", "ja-ko")),
         )
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["video_path"] = str(self.video_path)
         data["output_dir"] = str(self.output_dir)
+        if data.get("language_pair") == "ja-ko":
+            # Keep jobs made before the option existed byte-identical (fingerprints).
+            data.pop("language_pair")
         return data
+
+    @property
+    def direction(self):
+        from .languages import direction
+
+        return direction(self.language_pair)
 
 
 TRANSLATION_PROFILE_FIELDS = (
@@ -395,7 +409,7 @@ class JobPaths:
 
     @property
     def raw_name(self) -> str:
-        return f"{self.file_stem}_merged_raw_ja.json"
+        return f"{self.file_stem}_merged_raw_{self.config.direction.source}.json"
 
     @property
     def raw(self) -> Path:
@@ -451,11 +465,13 @@ class JobPaths:
 
     @property
     def ja_srt(self) -> Path:
-        return self.config.output_dir / f"{self.file_stem}_resegmented_ja.srt"
+        return self.config.output_dir / (
+            f"{self.file_stem}_resegmented_{self.config.direction.source}.srt"
+        )
 
     @property
     def ko_srt(self) -> Path:
-        return self.config.output_dir / f"{self.file_stem}_final_ko.srt"
+        return self.config.output_dir / f"{self.file_stem}_final_{self.config.direction.target}.srt"
 
     @property
     def review_tsv(self) -> Path:
@@ -685,7 +701,8 @@ def safe_file_stem(title: str) -> str:
 # Release tags and bracketed notes that are not part of a title.
 _TITLE_NOISE = re.compile(
     r"(?i)\b(?:2160p|1080p|720p|480p|4k|uhd|hdr|x26[45]|h\.?26[45]|hevc|avc|aac|ac3|"
-    r"web[- ]?dl|webrip|bluray|bdrip|dvdrip|hdtv|remux|10bit|8bit)\b"
+    r"web[- ]?dl|webrip|bluray|bdrip|dvdrip|hdrip|hdtv|remux|10bit|8bit|dts|ddp?5\.1|"
+    r"korea|korean|japan|japanese|kor|jpn|subbed|dubbed)\b"
 )
 _TITLE_BRACKETS = re.compile(r"[\[【(（〔][^\]】)）〕]*[\]】)）〕]")
 
@@ -703,6 +720,7 @@ def infer_title(path: Path) -> str:
     text = _TITLE_BRACKETS.sub(" ", path.stem)
     text = _TITLE_NOISE.sub(" ", text)
     text = re.sub(r"[._]+", " ", text)
+    text = re.sub(r"\s-[A-Za-z0-9]{2,12}$", "", " ".join(text.split()))  # release group
     text = " ".join(text.split()).strip(" -")
     if not text:
         text = " ".join(path.stem.split())

@@ -363,7 +363,9 @@ class AppBridge(QObject):
 
     @Property(str, notify=formChanged)
     def fileName(self) -> str:
-        return Path(self._video_path).name if self._video_path else "영상이 선택되지 않았습니다."
+        if not self._video_path:
+            return self._t("영상이 선택되지 않았습니다.")
+        return Path(self._video_path).name
 
     @Property(str, notify=formChanged)
     def fileMeta(self) -> str:
@@ -709,7 +711,15 @@ class AppBridge(QObject):
 
     @Property(list, notify=reviewChanged)
     def reviewItems(self) -> list[dict[str, Any]]:
-        return self._t_list(self._raw_reviewItems())
+        items = self._t_list(self._raw_reviewItems())
+        # A model note ("reason" of a review item) is content and stays as written, but
+        # the reason of a held batch is the app's own sentence around the model's reply.
+        return [
+            {**item, "reason": self._t(item.get("reason", ""))}
+            if item.get("kind") == "held"
+            else item
+            for item in items
+        ]
 
     def _raw_reviewItems(self) -> list[dict[str, Any]]:
         return self._review_items

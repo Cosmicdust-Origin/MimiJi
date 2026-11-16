@@ -1,5 +1,5 @@
 # ruff: noqa: E501
-"""0.9.3: natural Japanese line breaks; rescue pass ignores echoed term hints."""
+"""0.9.3: Japanese line breaks, rescue-pass filters, Japanese screen coverage."""
 
 import unittest
 
@@ -77,3 +77,137 @@ class RescueDuplicateTests(unittest.TestCase):
         self.assertEqual(_rescue_reject_reason(long, kept), "overlap")
         quiet = self._seg("진짜 뭔가 뱃살처럼 생기지 않았나요 여러분? 그쵸?", 69.36, 74.18)
         self.assertIsNone(_rescue_reject_reason(quiet, [self._seg("승승패스", 71.05, 71.65)]))
+
+
+class JapaneseScreenCoverageTests(unittest.TestCase):
+    """In 日本語 mode no app-written Korean may reach the screen."""
+
+    HANGUL = __import__("re").compile("[가-힣]")
+
+    def test_bridge_properties_have_no_korean_in_japanese_mode(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from PySide6.QtCore import QSettings
+        from PySide6.QtWidgets import QApplication
+
+        from local_subtitle_tool.bridge import _UNTRANSLATED_KEYS, AppBridge
+        from local_subtitle_tool.jobs import JobRegistry
+
+        QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = QSettings(str(root / "s.ini"), QSettings.Format.IniFormat)
+            settings.setValue("ui/language", "ja")
+            bridge = AppBridge(settings=settings, registry=JobRegistry(root / "r"), auto_diagnose=False)
+            meta = bridge.metaObject()
+            names = [meta.property(i).name() for i in range(meta.propertyOffset(), meta.propertyCount())]
+            found: set[tuple[str, str]] = set()
+
+            def walk(name: str, value: object, key: str | None = None) -> None:
+                if isinstance(value, str):
+                    if key not in _UNTRANSLATED_KEYS and self.HANGUL.search(value):
+                        found.add((name, value))
+                elif isinstance(value, dict):
+                    for item_key, item in value.items():
+                        walk(name, item, item_key)
+                elif isinstance(value, (list, tuple)):
+                    for item in value:
+                        walk(name, item, key)
+
+            for pair in ("ja-ko", "ko-ja"):
+                bridge.languagePair = pair
+                for provider in ("claude", "codex"):
+                    bridge.provider = provider
+                    for name in names:
+                        walk(name, getattr(bridge, name))
+            self.assertEqual(sorted(found), [])
+            self.assertEqual(bridge.fileName, "動画が選択されていません。")
+
+    def test_held_reason_is_translated_but_model_note_is_not(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from PySide6.QtCore import QSettings
+        from PySide6.QtWidgets import QApplication
+
+        from local_subtitle_tool.bridge import AppBridge
+        from local_subtitle_tool.jobs import JobRegistry
+
+        QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = QSettings(str(root / "s.ini"), QSettings.Format.IniFormat)
+            settings.setValue("ui/language", "ja")
+            bridge = AppBridge(settings=settings, registry=JobRegistry(root / "r"), auto_diagnose=False)
+            bridge._review_items = [
+                {"raw_id": 1, "kind": "held", "reason": "모델이 번역 배치 2을 거절했습니다. 모델 응답: “No”"},
+                {"raw_id": 2, "kind": "review", "reason": "모델 메모는 그대로"},
+            ]
+            held, review = bridge.reviewItems
+            self.assertEqual(held["reason"], "モデルが翻訳バッチ 2 を拒否しました。モデルの応答:「No」")
+            self.assertEqual(review["reason"], "모델 메모는 그대로")
+
+    def test_screen_messages_from_python_modules_have_japanese(self) -> None:
+        import ast
+        from pathlib import Path
+
+        from local_subtitle_tool.i18n import translate
+
+        package = Path(__file__).resolve().parents[1] / "src" / "local_subtitle_tool"
+        missing = []
+        # Modules whose messages reach the log, notifications, error lines or dialogs.
+        # (translator.py is mostly model instructions; its screen messages are checked below.)
+        for name in ("bridge.py", "jobs.py", "diagnostics.py", "transcriber.py", "diarization.py"):
+            tree = ast.parse((package / name).read_text(encoding="utf-8"))
+            parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+            def is_developer_only(node: ast.AST, parents: dict = parents) -> bool:
+                parent = parents.get(node)
+                if isinstance(parent, ast.Expr):  # docstring
+                    return True
+                while parent is not None and not isinstance(parent, (ast.FunctionDef, ast.Module)):
+                    if (
+                        isinstance(parent, ast.Call)
+                        and isinstance(parent.func, ast.Attribute)
+                        and isinstance(parent.func.value, ast.Name)
+                        and parent.func.value.id == "_logger"
+                    ):
+                        return True
+                    parent = parents.get(parent)
+                return False
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.JoinedStr):
+                    text = "".join(v.value if isinstance(v, ast.Constant) else "7" for v in node.values)
+                elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    if isinstance(parents.get(node), ast.JoinedStr):
+                        continue
+                    text = node.value + ("7" if node.value.endswith(": ") else "")
+                else:
+                    continue
+                if len(text) < 2 or not self.HANGUL.search(text) or is_developer_only(node):
+                    continue
+                if self.HANGUL.search(translate(text, "ja")):
+                    missing.append(f"{name}:{node.lineno} {text[:60]}")
+        self.assertEqual(missing, [])
+
+    def test_composed_translation_messages(self) -> None:
+        from local_subtitle_tool.i18n import translate
+
+        cases = {
+            "모델이 번역 배치 3을 거절했습니다 · 2회째. 모델 응답: “I can't”":
+                "モデルが翻訳バッチ 3 を拒否しました（2 回目）。モデルの応答:「I can't」",
+            "번역 배치 2이 모델에 의해 거절되어 보류했습니다. 다음 배치를 새 세션으로 계속합니다.":
+                "翻訳バッチ 2 はモデルに拒否されたため保留しました。次のバッチは新しいセッションで続けます。",
+            "1차 보강 후에도 확정되지 않은 3개를 한 줄씩 더 넓은 문맥으로 다시 확인합니다.":
+                "1 回目の補強でも確定しなかった 3 件を、さらに広い文脈で 1 行ずつ確認し直します。",
+            "속도 모드 값은 standard, fast 중 하나여야 합니다.": "処理速度 の値は standard, fast のいずれかにしてください。",
+            "최종 자막을 만들 수 없습니다. 미매핑 2개, 검토 필요 5개입니다.":
+                "最終字幕を作成できません。未対応 2 件、要確認 5 件があります。",
+            "병합 문장 교정 완료: 적용 4개, 수정 불필요 9개, 초안 유지 1개.":
+                "結合字幕の整え直しが完了: 適用 4 件、修正不要 9 件、元の訳を維持 1 件。",
+        }
+        for korean, japanese in cases.items():
+            self.assertEqual(translate(korean, "ja"), japanese)
+            self.assertEqual(translate(korean, "ko"), korean)

@@ -1815,6 +1815,7 @@ def _polish_merged_cues(
     register_summary: str,
     cancel_event: threading.Event | None,
     progress: ProgressCallback | None,
+    lanes: list[_RunContext] | None = None,
 ) -> dict[str, Any]:
     """Polish only merged cue boundaries; verified results never replace raw-id decisions."""
 
@@ -1895,9 +1896,36 @@ def _polish_merged_cues(
     verify_schema_path = paths.state_dir / "merge_verify_schema.json"
     atomic_write_json(polish_schema_path, MERGE_POLISH_SCHEMA)
     atomic_write_json(verify_schema_path, MERGE_VERIFY_SCHEMA)
-    for offset in range(0, len(pending_polish), MERGE_POLISH_CHUNK_SIZE):
-        chunk = pending_polish[offset : offset + MERGE_POLISH_CHUNK_SIZE]
-        chunk_no = offset // MERGE_POLISH_CHUNK_SIZE
+    # Records polished by an earlier, interrupted run that still wait for verification.
+    carried_over = [
+        record for record in records if record.get("status") == "verification_pending"
+    ]
+    # Shared records and the polish file are only touched under this lock; requests
+    # run outside it, like the translation lanes.
+    state_lock = threading.RLock()
+
+    def mark_failed(keys: set[tuple[int, ...]], exc: ProviderError, time_field: str) -> None:
+        status = (
+            "held"
+            if exc.kind in {
+                ProviderFailureKind.CONTENT_REFUSAL,
+                ProviderFailureKind.INVALID_OUTPUT,
+            }
+            else "failed"
+        )
+        with state_lock:
+            for key in keys:
+                record_by_ids[key].update(
+                    status=status,
+                    reason=str(exc),
+                    failure_kind=exc.kind.value,
+                    **{time_field: _now()},
+                )
+            save()
+
+    def polish(chunk_no: int, chunk: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Polish one chunk; returns its records that now wait for verification."""
+
         prompt_groups = [
             {
                 "raw_ids": group["raw_ids"],
@@ -1945,60 +1973,46 @@ def _polish_merged_cues(
         except ProviderCancelled:
             raise
         except ProviderError as exc:
-            status = (
-                "held"
-                if exc.kind in {
-                    ProviderFailureKind.CONTENT_REFUSAL,
-                    ProviderFailureKind.INVALID_OUTPUT,
-                }
-                else "failed"
-            )
-            for key in expected:
-                record_by_ids[key].update(
-                    status=status,
-                    reason=str(exc),
-                    failure_kind=exc.kind.value,
-                    processed_at=_now(),
-                )
-            save()
-            continue
+            mark_failed(expected, exc, "processed_at")
+            return []
 
         processed_at = _now()
         residue = config.direction.residue
-        for key, result in returned.items():
-            record = record_by_ids[key]
-            changed = result.get("changed") is True
-            candidate = str(result.get("polished_target") or "").strip()
-            note = str(result.get("note") or "").strip()
-            if not changed:
-                record.update(
-                    status="unchanged",
-                    polished_target=record["initial_target"],
-                    reason=note,
-                    processed_at=processed_at,
-                )
-            elif not candidate or residue.search(candidate):
-                record.update(
-                    status="rejected",
-                    polished_target=candidate,
-                    reason="교정문이 비어 있거나 목표 자막에 원문 문자가 남았습니다.",
-                    processed_at=processed_at,
-                )
-            else:
-                record.update(
-                    status="verification_pending",
-                    polished_target=candidate,
-                    reason=note,
-                    processed_at=processed_at,
-                )
-        save()
+        waiting: list[dict[str, Any]] = []
+        with state_lock:
+            for key, result in returned.items():
+                record = record_by_ids[key]
+                changed = result.get("changed") is True
+                candidate = str(result.get("polished_target") or "").strip()
+                note = str(result.get("note") or "").strip()
+                if not changed:
+                    record.update(
+                        status="unchanged",
+                        polished_target=record["initial_target"],
+                        reason=note,
+                        processed_at=processed_at,
+                    )
+                elif not candidate or residue.search(candidate):
+                    record.update(
+                        status="rejected",
+                        polished_target=candidate,
+                        reason="교정문이 비어 있거나 목표 자막에 원문 문자가 남았습니다.",
+                        processed_at=processed_at,
+                    )
+                else:
+                    record.update(
+                        status="verification_pending",
+                        polished_target=candidate,
+                        reason=note,
+                        processed_at=processed_at,
+                    )
+                    waiting.append(record)
+            save()
+        return waiting
 
-    verification_pending = [
-        record for record in records if record.get("status") == "verification_pending"
-    ]
-    for offset in range(0, len(verification_pending), MERGE_POLISH_CHUNK_SIZE):
-        chunk = verification_pending[offset : offset + MERGE_POLISH_CHUNK_SIZE]
-        chunk_no = offset // MERGE_POLISH_CHUNK_SIZE
+    def verify(chunk_no: int, chunk: list[dict[str, Any]]) -> None:
+        if not chunk:
+            return
         prompt_groups = [
             {
                 "raw_ids": record["raw_ids"],
@@ -2037,42 +2051,71 @@ def _polish_merged_cues(
         except ProviderCancelled:
             raise
         except ProviderError as exc:
-            status = (
-                "held"
-                if exc.kind in {
-                    ProviderFailureKind.CONTENT_REFUSAL,
-                    ProviderFailureKind.INVALID_OUTPUT,
-                }
-                else "failed"
-            )
-            for key in expected:
-                record_by_ids[key].update(
-                    status=status,
-                    reason=str(exc),
-                    failure_kind=exc.kind.value,
-                    verified_at=_now(),
-                )
-            save()
-            continue
+            mark_failed(expected, exc, "verified_at")
+            return
 
         verified_at = _now()
-        for key, result in returned.items():
-            checks = (
-                result.get("meaning_preserved") is True,
-                result.get("register_preserved") is True,
-                result.get("no_omitted_meaning") is True,
-                result.get("no_added_meaning") is True,
-                result.get("core_action_preserved") is True,
-                result.get("boundary_natural") is True,
-                result.get("accepted") is True,
-            )
-            record_by_ids[key].update(
-                status="accepted" if all(checks) else "rejected",
-                reason=str(result.get("reason") or "").strip(),
-                verification=dict(result),
-                verified_at=verified_at,
-            )
-        save()
+        with state_lock:
+            for key, result in returned.items():
+                checks = (
+                    result.get("meaning_preserved") is True,
+                    result.get("register_preserved") is True,
+                    result.get("no_omitted_meaning") is True,
+                    result.get("no_added_meaning") is True,
+                    result.get("core_action_preserved") is True,
+                    result.get("boundary_natural") is True,
+                    result.get("accepted") is True,
+                )
+                record_by_ids[key].update(
+                    status="accepted" if all(checks) else "rejected",
+                    reason=str(result.get("reason") or "").strip(),
+                    verification=dict(result),
+                    verified_at=verified_at,
+                )
+            save()
+
+    # Each chunk is polished and then verified on its own, and chunks run side by side:
+    # one at a time, 56 merged cues of a 2-hour video took ~6 min to polish and as long
+    # again to verify (three 1-3 min requests per stage at xhigh).
+    tasks: list[Callable[[], None]] = []
+    polish_chunks = [
+        pending_polish[offset : offset + MERGE_POLISH_CHUNK_SIZE]
+        for offset in range(0, len(pending_polish), MERGE_POLISH_CHUNK_SIZE)
+    ]
+    for chunk_no, chunk in enumerate(polish_chunks):
+        tasks.append(
+            lambda chunk_no=chunk_no, chunk=chunk: verify(chunk_no, polish(chunk_no, chunk))
+        )
+    for offset in range(0, len(carried_over), MERGE_POLISH_CHUNK_SIZE):
+        chunk_no = len(polish_chunks) + offset // MERGE_POLISH_CHUNK_SIZE
+        chunk = carried_over[offset : offset + MERGE_POLISH_CHUNK_SIZE]
+        tasks.append(lambda chunk_no=chunk_no, chunk=chunk: verify(chunk_no, chunk))
+
+    if tasks:
+        queue = list(tasks)
+        queue_lock = threading.Lock()
+        contexts = list(lanes or [None])
+
+        def worker(lane: _RunContext | None) -> Callable[[], None]:
+            def job() -> None:
+                token = _ACTIVE_RUN.set(lane) if lane is not None else None
+                try:
+                    while True:
+                        with queue_lock:
+                            if not queue:
+                                return
+                            task = queue.pop(0)
+                        task()
+                finally:
+                    if token is not None:
+                        _ACTIVE_RUN.reset(token)
+
+            return job
+
+        count = min(len(tasks), MAX_TRANSLATION_LANES)
+        _run_parallel(
+            [worker(contexts[index % len(contexts)]) for index in range(count)], cancel_event
+        )
 
     data = save()
     accepted = sum(record.get("status") == "accepted" for record in records)
@@ -3539,6 +3582,7 @@ def translate(
             register_summary=register_summary,
             cancel_event=run_cancel,
             progress=progress,
+            lanes=lanes,
         )
         manifest.stats.pop("current_stage", None)
         manifest.set_status(JobStatus.TRANSLATED)

@@ -228,3 +228,142 @@ class MergePolishTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConcurrentQualityProvider:
+    """Answers polish and verify requests after a short delay and records overlap."""
+
+    supports_quality_gate = True
+    supports_sessions = False
+
+    def __init__(self, delay: float = 0.3) -> None:
+        import threading
+
+        self.delay = delay
+        self.lock = threading.Lock()
+        self.active = 0
+        self.peak = 0
+        self.order: list[str] = []
+
+    def run(self, **kwargs) -> ProviderResult:
+        import time
+
+        prompt = str(kwargs["prompt"])
+        groups = json.loads(prompt.split("입력 데이터:\n", 1)[1])["groups"]
+        verify = prompt.startswith("귀하는 병합 자막 교정 결과의 독립적인")
+        with self.lock:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            self.order.append("verify" if verify else "polish")
+        time.sleep(self.delay)
+        with self.lock:
+            self.active -= 1
+        if verify:
+            payload = {
+                "groups": [
+                    {
+                        "raw_ids": group["raw_ids"],
+                        "meaning_preserved": True,
+                        "register_preserved": True,
+                        "no_omitted_meaning": True,
+                        "no_added_meaning": True,
+                        "core_action_preserved": True,
+                        "boundary_natural": True,
+                        "accepted": True,
+                        "reason": "",
+                    }
+                    for group in groups
+                ]
+            }
+        else:
+            payload = {
+                "groups": [
+                    {
+                        "raw_ids": group["raw_ids"],
+                        "changed": True,
+                        "polished_target": f"다듬은 문장 {group['raw_ids'][0]}",
+                        "note": "",
+                    }
+                    for group in groups
+                ]
+            }
+        return ProviderResult(payload=payload, stdout="", stderr="", elapsed_seconds=self.delay)
+
+
+class MergePolishConcurrencyTests(unittest.TestCase):
+    def test_chunks_are_polished_and_verified_side_by_side(self) -> None:
+        import time
+
+        from local_subtitle_tool.core import JobManifest
+        from local_subtitle_tool.translator import MERGE_POLISH_CHUNK_SIZE, _polish_merged_cues
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / "long.mp4"
+            video.touch()
+            config = JobConfig(
+                video_path=video, code="long", output_dir=root / "out", language_pair="ja-ko"
+            )
+            paths = JobPaths(config)
+            paths.state_dir.mkdir(parents=True, exist_ok=True)
+            paths.batches_dir.mkdir(parents=True, exist_ok=True)
+            group_count = MERGE_POLISH_CHUNK_SIZE * 2 + 5  # three chunks
+            segments, decisions = [], []
+            for index in range(group_count * 2):
+                start = index * 3.0
+                segments.append({"id": index, "start": start, "end": start + 2.0, "text": "それで"})
+                decisions.append(
+                    {
+                        "raw_id": index,
+                        "action": "translated",
+                        "ja_fixed": "それで",
+                        "ko": f"줄 {index}",
+                        "merge_with_previous": index % 2 == 1,
+                    }
+                )
+            provider = ConcurrentQualityProvider()
+            started = time.monotonic()
+            data = _polish_merged_cues(
+                provider=provider,
+                config=config,
+                manifest=JobManifest.load_or_create(config),
+                paths=paths,
+                segments=segments,
+                decisions=decisions,
+                register_summary="",
+                cancel_event=None,
+                progress=None,
+            )
+            elapsed = time.monotonic() - started
+
+            # An interrupted run leaves polished cues waiting for verification: a rerun
+            # only verifies them.
+            saved = load_json(paths.merged_cue_polish)
+            for record in saved["records"]:
+                record["status"] = "verification_pending"
+            paths.merged_cue_polish.write_text(
+                json.dumps(saved, ensure_ascii=False), encoding="utf-8"
+            )
+            resumed = ConcurrentQualityProvider(delay=0.01)
+            again = _polish_merged_cues(
+                provider=resumed,
+                config=config,
+                manifest=JobManifest.load_or_create(config),
+                paths=paths,
+                segments=segments,
+                decisions=decisions,
+                register_summary="",
+                cancel_event=None,
+                progress=None,
+            )
+            self.assertEqual(resumed.order, ["verify"] * 3)
+            self.assertTrue(all(record["status"] == "accepted" for record in again["records"]))
+
+        records = data["records"]
+        self.assertEqual(len(records), group_count)
+        self.assertTrue(all(record["status"] == "accepted" for record in records))
+        self.assertEqual(provider.order.count("polish"), 3)
+        self.assertEqual(provider.order.count("verify"), 3)
+        self.assertGreaterEqual(provider.peak, 2)  # requests overlapped
+        # one at a time this is 6 x 0.3 s; side by side about 2 x 0.3 s
+        self.assertLess(elapsed, 6 * provider.delay * 0.75)

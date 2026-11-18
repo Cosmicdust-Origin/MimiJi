@@ -194,8 +194,12 @@ def classify_provider_failure(
         "login required",
         "authentication required",
         "authentication failed",
+        "failed to authenticate",
         "unauthorized",
         "invalid oauth",
+        "oauth access token has expired",
+        "token has expired",
+        "re-authenticate",
         "로그인이 필요",
         "인증이 필요",
         "401 unauthorized",
@@ -242,6 +246,8 @@ def classify_provider_failure(
     transient_markers = (
         "connection reset",
         "connection refused",
+        "connectionrefused",
+        "unable to connect to api",
         "network error",
         "temporarily unavailable",
         "service unavailable",
@@ -362,6 +368,11 @@ class TranslationProvider:
     def parse_output(self, *, stdout: str, output_path: Path) -> dict[str, Any]:
         raise NotImplementedError
 
+    def subprocess_environment(self) -> dict[str, str] | None:
+        """Environment for the provider CLI, or ``None`` to inherit it unchanged."""
+
+        return None
+
     def run(
         self,
         *,
@@ -436,6 +447,7 @@ class TranslationProvider:
                 process = subprocess.Popen(
                     command,
                     cwd=workdir,
+                    env=self.subprocess_environment(),
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=stderr_file,
@@ -628,7 +640,13 @@ class TranslationProvider:
             raise ProviderError(f"{command[0]} 실행 파일을 찾을 수 없습니다.")
         invocation = prepare_command(executable, *command[1:])
         flags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
-        subprocess.Popen(invocation, creationflags=flags, close_fds=True, shell=False)
+        subprocess.Popen(
+            invocation,
+            env=self.subprocess_environment(),
+            creationflags=flags,
+            close_fds=True,
+            shell=False,
+        )
 
     def logout_command(self) -> list[str]:
         raise NotImplementedError
@@ -737,6 +755,21 @@ class CodexProvider(TranslationProvider):
 
 class ClaudeProvider(TranslationProvider):
     name = "claude"
+
+    def subprocess_environment(self) -> dict[str, str]:
+        """Use the Claude subscription login selected by MimiJi.
+
+        Stale API/gateway overrides can make ``claude auth status`` look healthy while
+        every real request is sent to a dead custom endpoint. MimiJi exposes the
+        official Claude Code login flow, so its child process must not inherit those
+        unrelated billing or routing overrides. The OAuth credential itself remains
+        available through Claude Code's credential store (or its OAuth token variable).
+        """
+
+        environment = os.environ.copy()
+        for name in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+            environment.pop(name, None)
+        return environment
 
     def status(self) -> CheckResult:
         return claude_status()

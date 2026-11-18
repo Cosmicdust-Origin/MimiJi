@@ -35,8 +35,9 @@ class AuthenticationStatusTests(unittest.TestCase):
             self.assertTrue(codex_status().ok)
 
     @patch("local_subtitle_tool.preflight.shutil.which", return_value="claude.exe")
+    @patch("local_subtitle_tool.preflight._claude_oauth_expiry_ms", return_value=None)
     @patch("local_subtitle_tool.preflight.run_command")
-    def test_claude_requires_claude_ai_login(self, run_command, _which) -> None:
+    def test_claude_requires_claude_ai_login(self, run_command, _expiry, _which) -> None:
         console = {"loggedIn": True, "authMethod": "console", "subscriptionType": "api"}
         run_command.return_value = subprocess.CompletedProcess(
             ["claude"], 0, stdout=json.dumps(console), stderr=""

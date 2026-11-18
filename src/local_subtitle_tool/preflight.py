@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -531,6 +532,18 @@ def codex_status() -> CheckResult:
     )
 
 
+def _claude_oauth_expiry_ms() -> int | None:
+    """Read only Claude Code's OAuth expiry timestamp, never its credentials."""
+
+    config_root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    try:
+        payload = json.loads((config_root / ".credentials.json").read_text(encoding="utf-8"))
+        expiry = payload.get("claudeAiOauth", {}).get("expiresAt")
+        return int(expiry) if expiry is not None else None
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def claude_status() -> CheckResult:
     executable = resolve_executable("claude")
     if not executable:
@@ -584,6 +597,19 @@ def claude_status() -> CheckResult:
     )
     auth_method = payload.get("authMethod", "unknown")
     subscription = payload.get("subscriptionType", "unknown")
+    expiry_ms = _claude_oauth_expiry_ms()
+    if expiry_ms is not None:
+        details["credential_expired"] = expiry_ms <= int(time.time() * 1000)
+    if ok and details.get("credential_expired"):
+        return CheckResult(
+            "claude",
+            False,
+            "Claude 구독 로그인 토큰이 만료되었습니다. 다시 로그인하십시오.",
+            details,
+            status=LOGIN_REQUIRED,
+            priority=60,
+            required=False,
+        )
     if ok:
         message = (
             f"Claude 구독 로그인을 사용할 수 있습니다. 인증={auth_method}, 구독={subscription}"

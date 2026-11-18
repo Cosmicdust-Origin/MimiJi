@@ -634,9 +634,20 @@ def _counting_active_time(manifest: JobManifest) -> Iterator[None]:
         if elapsed is not None:
             manifest.add_active_seconds(elapsed)
 
-# One review re-request may not hold the job for minutes; an unresolved line goes to
-# the review screen, where the user can accept, edit or delete it.
+# Codex normally resolves a small review request well inside 150 seconds. Claude Code
+# can spend longer retrying a connection before it returns the useful API/auth error;
+# cutting it off at 150 seconds hid that cause and made every remaining review group
+# look like a timeout after a model change.
 REVIEW_REQUEST_TIMEOUT_SECONDS = 150
+CLAUDE_REVIEW_REQUEST_TIMEOUT_SECONDS = 600
+
+
+def _review_request_timeout(config: JobConfig) -> int:
+    return (
+        CLAUDE_REVIEW_REQUEST_TIMEOUT_SECONDS
+        if config.provider == "claude"
+        else REVIEW_REQUEST_TIMEOUT_SECONDS
+    )
 
 # Share of the translation stage's progress bar: batches first, then review rounds.
 BATCH_PROGRESS_SHARE = 0.8
@@ -2942,7 +2953,7 @@ def _recover_review_items(
                             )
                         ),
                         checkpoint_key=fingerprint,
-                        request_timeout=REVIEW_REQUEST_TIMEOUT_SECONDS,
+                        request_timeout=_review_request_timeout(config),
                         max_transient_attempts=1,
                     )
                 except ProviderError as exc:

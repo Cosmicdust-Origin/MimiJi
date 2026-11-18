@@ -263,23 +263,19 @@ class CheckpointResumeTests(unittest.TestCase):
                     return_value=_speech((1.0, 6.0), (24.0, 29.0)),
                 ),
                 patch("faster_whisper.WhisperModel") as whisper_model,
-                patch("faster_whisper.BatchedInferencePipeline") as batched_pipeline,
             ):
                 whisper_model.return_value.transcribe.side_effect = [
                     (iter([_segment(0.0, 1.0, "앞 대사")]), _info()),
                     (iter([_segment(0.0, 1.0, "뒤 대사")]), _info()),
+                    (iter([_segment(10.0, 12.0, "작은 대사")]), _info()),
                 ]
-                batched_pipeline.return_value.transcribe.return_value = (
-                    iter([_segment(10.0, 12.0, "작은 대사")]),
-                    _info(),
-                )
 
                 transcribe(config)
 
-            rescue_call = batched_pipeline.return_value.transcribe.call_args
+            rescue_call = whisper_model.return_value.transcribe.call_args_list[2]
             self.assertEqual(
                 rescue_call.kwargs["clip_timestamps"],
-                [{"start": 0.0, "end": 30.0}],
+                [0.0, 30.0],
             )
             raw = json.loads(JobPaths(config).raw.read_text(encoding="utf-8"))
             self.assertEqual(

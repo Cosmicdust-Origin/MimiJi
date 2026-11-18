@@ -56,6 +56,13 @@ class RescueDuplicateTests(unittest.TestCase):
         # far away, the same words are a new line
         self.assertIsNone(_rescue_reject_reason(self._seg("쌤이 어디 가셨지?", 120.0, 121.0), kept))
 
+    def test_followup_sentence_that_extends_a_short_phrase_is_not_a_duplicate(self) -> None:
+        from local_subtitle_tool.transcriber import _rescue_reject_reason
+
+        kept = [self._seg("우삼겹 덮밥", 53.52, 54.52)]
+        followup = self._seg("우삼겹 덮밥처럼 생기셨어요", 55.28, 56.64)
+        self.assertIsNone(_rescue_reject_reason(followup, kept))
+
     def test_gap_is_measured_against_written_lines_not_vad(self) -> None:
         import numpy as np
 

@@ -106,6 +106,44 @@ class SubtitleTests(unittest.TestCase):
             )
             self.assertEqual(validate_srt_pair(ja, ko).junk_fragments, 1)
 
+    def test_goodnight_check_does_not_match_grew_well(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.srt"
+            target = root / "target.srt"
+            source.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\nずいぶん成長したね\n",
+                encoding="utf-8",
+            )
+            target.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\n제법 잘 자랐네?\n",
+                encoding="utf-8",
+            )
+
+            result = validate_srt_pair(source, target)
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.goodnight_false_positives, 0)
+
+    def test_goodnight_check_still_rejects_an_unsupported_phrase(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.srt"
+            target = root / "target.srt"
+            source.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\nまた明日\n",
+                encoding="utf-8",
+            )
+            target.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\n잘 자요.\n",
+                encoding="utf-8",
+            )
+
+            result = validate_srt_pair(source, target)
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.goodnight_false_positives, 1)
+
     def test_partial_translation_cannot_build_final_srt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

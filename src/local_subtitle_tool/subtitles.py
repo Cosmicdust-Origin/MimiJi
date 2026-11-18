@@ -369,7 +369,11 @@ def validate_srt_pair(
             if index != ja_index or abs(start - ja_start) > 0.001 or abs(end - ja_end) > 0.001:
                 timing_mismatches += 1
             normalized_ja = re.sub(r"\s+", "", ja_text)
-            if not reverse and "잘 자" in ko_text and "おやすみ" not in normalized_ja:
+            goodnight = re.search(
+                r"(?<![가-힣])잘\s+자(?:요|렴)?(?=$|[\s.,!?…~\"'”’])",
+                ko_text,
+            )
+            if not reverse and goodnight and "おやすみ" not in normalized_ja:
                 goodnight_false_positives += 1
         if end <= start:
             reversals += 1

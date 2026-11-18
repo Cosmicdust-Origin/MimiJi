@@ -65,12 +65,13 @@ RESCUE_MAX_COMPRESSION = 2.4
 RESCUE_MAX_CHARACTER_RUN = 15
 RESCUE_OVERLAP_RATIO = 0.4
 RESCUE_DUPLICATE_SECONDS = 3.0
+RESCUE_DUPLICATE_TEXT_RATIO = 0.65
 RESCUE_MIN_GAP_SECONDS = 2.5
 RESCUE_GAP_PAD_SECONDS = 0.5
-# Rescue windows are decoded together on the GPU, 16 windows per round
-# (테스트 영상 B: 24 windows in 18.9 s batched vs 40.3 s one by one).
+# Keep checkpoint writes and cancellation opportunities reasonably frequent while the
+# direct Whisper rescue pass examines suspect windows. BatchedInferencePipeline is not
+# used here: it skipped a short real line that the ordinary decoder recovered.
 RESCUE_BATCH_WINDOWS = 16
-RESCUE_BATCH_SIZE = 8
 VAD_SCHEMA_VERSION = 1
 CLIP_SECONDS = 30.0
 SAMPLING_RATE = 16000
@@ -213,6 +214,7 @@ def _settings_fingerprint(
             "max_character_run": RESCUE_MAX_CHARACTER_RUN,
             "overlap_ratio": RESCUE_OVERLAP_RATIO,
             "duplicate_seconds": RESCUE_DUPLICATE_SECONDS,
+            "duplicate_text_ratio": RESCUE_DUPLICATE_TEXT_RATIO,
             "min_gap_seconds": RESCUE_MIN_GAP_SECONDS,
             "gap_pad_seconds": RESCUE_GAP_PAD_SECONDS,
             "gap_coverage": "first-pass-lines-cross-window-v2",
@@ -221,9 +223,7 @@ def _settings_fingerprint(
         if hotwords:
             payload["hotwords"] = hotwords
         if rescue_decode is _CURRENT_RESCUE_DECODE:
-            payload["rescue_decode"] = (
-                f"batched-{RESCUE_BATCH_SIZE}-gap-triggered-window-context-no-hotwords-v5"
-            )
+            payload["rescue_decode"] = "direct-gap-triggered-window-context-no-hotwords-v6"
     text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -355,8 +355,11 @@ def _rescue_reject_reason(
             continue
         # The same line heard twice, possibly with a word more or less
         # ("어디 가셨지?" / "쌤이 어디 가셨지?").
+        shorter = min(len(normalized), len(other_text))
+        longer = max(len(normalized), len(other_text))
         if normalized == other_text or (
-            min(len(normalized), len(other_text)) >= 4
+            shorter >= 4
+            and shorter / longer >= RESCUE_DUPLICATE_TEXT_RATIO
             and (normalized in other_text or other_text in normalized)
         ):
             return "duplicate"
@@ -1062,35 +1065,24 @@ def transcribe(
             except Exception as exc:
                 raise _device_failure(runtime, exc) from exc
 
-        pipeline = None
-
         def rescue_decode(rescue_spans: list[ClipWindow]) -> list[dict[str, Any]]:
-            """Decode several suspect spans in one GPU batch."""
+            """Decode suspect windows with ordinary Whisper for completeness."""
 
-            nonlocal pipeline
             try:
-                if pipeline is None:
-                    from faster_whisper import BatchedInferencePipeline
-
-                    pipeline = BatchedInferencePipeline(model=ensure_model())
-                segments, _ = pipeline.transcribe(
+                timestamps = [
+                    value
+                    for span in rescue_spans
+                    for value in (span.start, span.end)
+                ]
+                segments, _ = ensure_model().transcribe(
                     audio,
                     language=config.direction.source,
                     task="transcribe",
                     # No hotwords here: on quiet audio without VAD, Whisper echoes the
                     # hint list for the whole window ("서수민, 문쌤" x20 in 실기 영상 F,
                     # hiding the real quiet lines it otherwise decodes correctly).
-                    clip_timestamps=[
-                        {"start": span.start, "end": span.end} for span in rescue_spans
-                    ],
-                    batch_size=RESCUE_BATCH_SIZE,
-                    without_timestamps=False,
-                    vad_filter=False,
-                    **{
-                        key: value
-                        for key, value in options.items()
-                        if key not in {"vad_filter", "chunk_length", "condition_on_previous_text"}
-                    },
+                    clip_timestamps=timestamps,
+                    **options,
                 )
                 decoded = []
                 for segment in segments:
@@ -1241,7 +1233,6 @@ def transcribe(
                         f"{window.end:.1f}/{duration:.1f}초",
                     )
 
-        del pipeline
         del model
         output_segments = _merge_checkpoints(
             config,

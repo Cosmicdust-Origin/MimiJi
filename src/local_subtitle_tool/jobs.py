@@ -15,6 +15,7 @@ TERMINAL_STATUSES = {
     JobStatus.COMPLETED.value,
     JobStatus.COMPLETED_WITH_OMISSIONS.value,
 }
+JOB_SORT_MODES = frozenset({"recent", "completed", "created"})
 
 
 class JobRegistryError(RuntimeError):
@@ -23,6 +24,34 @@ class JobRegistryError(RuntimeError):
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _timestamp(value: str) -> float:
+    """Comparable instant for ISO timestamps, including mixed UTC offsets."""
+
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
+
+
+def _sort_records(records: list[JobRecord], sort_by: str) -> list[JobRecord]:
+    if sort_by not in JOB_SORT_MODES:
+        raise ValueError(f"지원하지 않는 작업 정렬 방식입니다: {sort_by}")
+    if sort_by == "created":
+        return sorted(records, key=lambda item: _timestamp(item.created_at), reverse=True)
+    if sort_by == "completed":
+        # Completed work comes first, newest completion first. Incomplete work follows
+        # in its own recent-update order so it remains discoverable.
+        return sorted(
+            records,
+            key=lambda item: (not item.incomplete, _timestamp(item.updated_at)),
+            reverse=True,
+        )
+    return sorted(records, key=lambda item: _timestamp(item.updated_at), reverse=True)
 
 
 def _config_fingerprint(config: JobConfig) -> str:
@@ -127,7 +156,9 @@ class JobRecord:
                 max(self.completed_batches) + 1 if self.completed_batches else None
             ),
             "active_elapsed_seconds": self.active_elapsed_seconds,
+            "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "completed_at": self.updated_at if not self.incomplete else "",
             "error": self.error,
             "registry_error": self.registry_error,
             "incomplete": self.incomplete,
@@ -319,6 +350,7 @@ class JobRegistry:
         *,
         include_completed: bool = False,
         refresh: bool = True,
+        sort_by: str = "recent",
     ) -> list[JobRecord]:
         records = self._load()
         if refresh:
@@ -328,7 +360,7 @@ class JobRegistry:
         jobs = list(records.values())
         if not include_completed:
             jobs = [item for item in jobs if item.incomplete]
-        return sorted(jobs, key=lambda item: item.updated_at, reverse=True)
+        return _sort_records(jobs, sort_by)
 
     def remove(self, job_id: str) -> JobRecord:
         records = self._load()

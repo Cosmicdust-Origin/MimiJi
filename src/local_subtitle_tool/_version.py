@@ -5,4 +5,4 @@ section to CHANGELOG.md. pyproject.toml, the GUI, the CLI (--version), logs, rep
 the Windows executable version resource all read it from here.
 """
 
-__version__ = "0.9.7"
+__version__ = "0.9.8"

@@ -16,10 +16,70 @@ Item {
             Layout.fillWidth: true
             eyebrow: "Saved jobs"
             title: bridge.tr("이전 작업", bridge.uiLanguage)
-            description: bridge.tr("완료되지 않은 작업은 마지막 안전 지점부터 이어집니다.", bridge.uiLanguage)
+            description: bridge.jobsFilter === "all"
+                         ? bridge.tr("완료된 작업과 이어갈 작업을 함께 표시합니다.", bridge.uiLanguage)
+                         : bridge.tr("완료되지 않은 작업은 마지막 안전 지점부터 이어집니다.", bridge.uiLanguage)
             AppButton {
                 text: bridge.tr("새 작업", bridge.uiLanguage)
                 onClicked: bridge.newJob()
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: 56
+            color: Theme.paperDeep
+            border.color: Theme.line
+            border.width: 1
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                spacing: 12
+
+                Text {
+                    text: bridge.tr("표시", bridge.uiLanguage)
+                    color: Theme.inkFaint
+                    font.family: Theme.family
+                    font.pixelSize: 12
+                }
+                ChoiceBox {
+                    Layout.preferredWidth: 132
+                    model: [bridge.tr("전체 작업", bridge.uiLanguage), bridge.tr("미완료만", bridge.uiLanguage)]
+                    currentIndex: bridge.jobsFilter === "all" ? 0 : 1
+                    onActivated: function(index) {
+                        bridge.jobsFilter = index === 0 ? "all" : "incomplete"
+                    }
+                }
+                Item { Layout.preferredWidth: 12 }
+                Text {
+                    text: bridge.tr("정렬", bridge.uiLanguage)
+                    color: Theme.inkFaint
+                    font.family: Theme.family
+                    font.pixelSize: 12
+                }
+                ChoiceBox {
+                    Layout.preferredWidth: 150
+                    model: [
+                        bridge.tr("최근 변경순", bridge.uiLanguage),
+                        bridge.tr("완료한 순", bridge.uiLanguage),
+                        bridge.tr("생성한 순", bridge.uiLanguage)
+                    ]
+                    currentIndex: bridge.jobsSort === "completed" ? 1
+                                  : bridge.jobsSort === "created" ? 2 : 0
+                    onActivated: function(index) {
+                        bridge.jobsSort = index === 1 ? "completed"
+                                        : index === 2 ? "created" : "recent"
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Text {
+                    text: bridge.tr("선택은 다음 실행에도 유지됩니다.", bridge.uiLanguage)
+                    color: Theme.inkFaint
+                    font.family: Theme.family
+                    font.pixelSize: 11
+                }
             }
         }
 
@@ -61,7 +121,7 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.preferredWidth: 340
                                 spacing: 4
-                                Text { text: modelData.stage_title; color: Theme.ink; font.family: Theme.family; font.pixelSize: 13; font.weight: Font.DemiBold }
+                                Text { text: modelData.stage_title; color: modelData.incomplete ? Theme.ink : Theme.inkSoft; font.family: Theme.family; font.pixelSize: 13; font.weight: Font.DemiBold }
                                 Text { text: modelData.stage_detail; color: Theme.inkSoft; font.family: Theme.family; font.pixelSize: 12 }
                                 Text {
                                     visible: Boolean(modelData.registry_error)
@@ -74,7 +134,7 @@ Item {
                             ColumnLayout {
                                 Layout.preferredWidth: 130
                                 spacing: 4
-                                Text { text: modelData.updated_text; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
+                                Text { text: bridge.tr(modelData.time_label, bridge.uiLanguage) + "  " + modelData.updated_text; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
                                 Text { text: bridge.tr("누적 ", bridge.uiLanguage) + modelData.elapsed_text; color: Theme.inkFaint; font.family: Theme.family; font.pixelSize: 11 }
                             }
                             AppButton {
@@ -84,10 +144,17 @@ Item {
                                 onClicked: bridge.removeJob(modelData.job_id)
                             }
                             AppButton {
-                                text: bridge.tr("이어서 진행", bridge.uiLanguage)
-                                kind: index === 0 ? "primary" : "default"
+                                text: modelData.incomplete
+                                      ? bridge.tr("이어서 진행", bridge.uiLanguage)
+                                      : bridge.tr("결과 폴더", bridge.uiLanguage)
+                                kind: index === 0 && modelData.incomplete ? "primary" : "default"
                                 enabled: !bridge.busy && !modelData.registry_error
-                                onClicked: bridge.resumeJob(modelData.job_id)
+                                onClicked: {
+                                    if (modelData.incomplete)
+                                        bridge.resumeJob(modelData.job_id)
+                                    else
+                                        bridge.openPath(modelData.output_dir)
+                                }
                             }
                         }
                     }
@@ -97,7 +164,9 @@ Item {
                     visible: bridge.jobs.length === 0
                     width: parent.width
                     topPadding: 36
-                    text: bridge.tr("이어갈 미완료 작업이 없습니다.", bridge.uiLanguage)
+                    text: bridge.jobsFilter === "all"
+                          ? bridge.tr("저장된 작업이 없습니다.", bridge.uiLanguage)
+                          : bridge.tr("이어갈 미완료 작업이 없습니다.", bridge.uiLanguage)
                     color: Theme.inkFaint
                     font.family: Theme.family
                     font.pixelSize: 14

@@ -21,6 +21,7 @@ Item {
         var entry = root.drafts[rawId] || {}
         entry[field] = value
         root.drafts[rawId] = entry
+        bridge.noteReviewActivity()
     }
 
     function formatTime(seconds) {
@@ -32,6 +33,11 @@ Item {
     }
 
     readonly property bool idle: !bridge.busy && !bridge.reviewBusy
+
+    TapHandler {
+        acceptedButtons: Qt.LeftButton
+        onTapped: bridge.noteReviewActivity()
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -102,10 +108,23 @@ Item {
                     lineHeight: 1.25
                     wrapMode: Text.WordWrap
                 }
+                Text {
+                    Layout.fillWidth: true
+                    visible: bridge.reviewAutoAcceptActive
+                    text: bridge.tr("입력이 없으면 ", bridge.uiLanguage)
+                          + bridge.reviewAutoAcceptSeconds
+                          + bridge.tr("초 후 유효한 모델 번역을 자동 채택합니다.", bridge.uiLanguage)
+                    color: Theme.ink
+                    font.family: Theme.family
+                    font.pixelSize: 12
+                    font.weight: Font.DemiBold
+                    wrapMode: Text.WordWrap
+                }
             }
         }
 
         ScrollView {
+            id: reviewScroll
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
@@ -275,6 +294,10 @@ Item {
                                         placeholderText: bridge.tr("자막에 들어갈 ", bridge.uiLanguage) + bridge.targetLanguageName + bridge.tr(" 문장", bridge.uiLanguage)
                                         text: root.draftValue(row.modelData.raw_id, "ko", row.modelData.ko)
                                         enabled: !bridge.busy
+                                        onActiveFocusChanged: {
+                                            if (activeFocus)
+                                                bridge.noteReviewActivity()
+                                        }
                                         onTextEdited: root.setDraft(row.modelData.raw_id, "ko", text)
                                     }
                                 }
@@ -294,6 +317,10 @@ Item {
                                         placeholderText: bridge.tr("비워 두면 원문 그대로", bridge.uiLanguage)
                                         text: root.draftValue(row.modelData.raw_id, "ja", row.modelData.ja_fixed)
                                         enabled: !bridge.busy
+                                        onActiveFocusChanged: {
+                                            if (activeFocus)
+                                                bridge.noteReviewActivity()
+                                        }
                                         onTextEdited: root.setDraft(row.modelData.raw_id, "ja", text)
                                     }
                                 }
@@ -320,6 +347,14 @@ Item {
                     font.pixelSize: 13
                     topPadding: 18
                 }
+            }
+        }
+
+        Connections {
+            target: reviewScroll.contentItem
+            ignoreUnknownSignals: true
+            function onContentYChanged() {
+                bridge.noteReviewActivity()
             }
         }
 

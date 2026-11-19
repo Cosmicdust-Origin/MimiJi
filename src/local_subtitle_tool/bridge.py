@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import threading
 import time
@@ -94,6 +95,9 @@ RECOMMENDED_MODEL = {"codex": "gpt-5.6-luna"}
 RECOMMENDED_SPEED = {"codex": "fast"}
 DEFAULT_SPEED = {"codex": "fast", "claude": "standard"}
 SPEED_OPTIONS = ["standard", "fast"]
+JOB_FILTER_OPTIONS = frozenset({"all", "incomplete"})
+JOB_SORT_OPTIONS = frozenset({"recent", "completed", "created"})
+REVIEW_AUTO_ACCEPT_SECONDS = 60
 
 
 def _recommended_labels(options: list[str], recommended: str | None) -> list[str]:
@@ -116,6 +120,29 @@ def _format_size(size: int) -> str:
             return f"{value:.0f} {unit}" if unit in {"B", "KB"} else f"{value:.1f} {unit}"
         value /= 1024
     return "0 B"
+
+
+def _format_job_time(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return value[:16].replace("T", " ")
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone()
+    return parsed.strftime("%Y-%m-%d %H:%M")
+
+
+def _play_completion_sound() -> None:
+    """Play one short native sound without adding a media dependency or asset."""
+
+    if os.name != "nt":
+        return
+    try:
+        import winsound
+
+        winsound.MessageBeep(winsound.MB_OK)
+    except (ImportError, OSError, RuntimeError):
+        _logger.warning("작업 완료 알림음을 재생하지 못했습니다.", exc_info=True)
 
 
 def _bounded_ui_message(error: object, limit: int = 300) -> str:
@@ -173,6 +200,7 @@ class AppBridge(QObject):
     logsChanged = Signal()
     resultsChanged = Signal()
     reviewChanged = Signal()
+    reviewIdleChanged = Signal()
     accountsChanged = Signal()
     themeChanged = Signal()
     languageChanged = Signal()
@@ -200,6 +228,8 @@ class AppBridge(QObject):
         self._review_items: list[dict[str, Any]] = []
         self._review_busy = False
         self._review_config: JobConfig | None = None
+        self._review_last_activity: float | None = None
+        self._review_idle_seconds = 0
         self._resume_choice_visible = False
         self._resume_settings_mode = False
         self._resume_original_config: JobConfig | None = None
@@ -258,6 +288,12 @@ class AppBridge(QObject):
         self._ui_language = str(self._settings.value("ui/language", "ko"))
         if self._ui_language not in UI_LANGUAGES:
             self._ui_language = "ko"
+        self._jobs_filter = str(self._settings.value("jobs/filter", "all"))
+        if self._jobs_filter not in JOB_FILTER_OPTIONS:
+            self._jobs_filter = "all"
+        self._jobs_sort = str(self._settings.value("jobs/sort", "recent"))
+        if self._jobs_sort not in JOB_SORT_OPTIONS:
+            self._jobs_sort = "recent"
         self._codex_sessions = bool(
             self._settings.value("translation/codex_sessions", True, type=bool)
         )
@@ -462,6 +498,7 @@ class AppBridge(QObject):
             self.logsChanged,
             self.resultsChanged,
             self.reviewChanged,
+            self.reviewIdleChanged,
             self.accountsChanged,
         ):
             signal.emit()
@@ -732,6 +769,14 @@ class AppBridge(QObject):
     def reviewUnresolvedCount(self) -> int:
         return sum(1 for item in self._review_items if not item.get("resolved"))
 
+    @Property(bool, notify=reviewIdleChanged)
+    def reviewAutoAcceptActive(self) -> bool:
+        return self._review_last_activity is not None
+
+    @Property(int, notify=reviewIdleChanged)
+    def reviewAutoAcceptSeconds(self) -> int:
+        return self._review_idle_seconds
+
     @Property(str, notify=formChanged)
     def reasoning(self) -> str:
         return self._reasoning
@@ -949,6 +994,34 @@ class AppBridge(QObject):
     def _raw_jobs(self) -> list[dict[str, Any]]:
         return self._jobs
 
+    @Property(str, notify=jobsChanged)
+    def jobsFilter(self) -> str:
+        return self._jobs_filter
+
+    @jobsFilter.setter
+    def jobsFilter(self, value: str) -> None:
+        normalized = value.strip().lower()
+        if normalized not in JOB_FILTER_OPTIONS or normalized == self._jobs_filter:
+            return
+        self._jobs_filter = normalized
+        self._settings.setValue("jobs/filter", normalized)
+        self._settings.sync()
+        self.refreshJobs()
+
+    @Property(str, notify=jobsChanged)
+    def jobsSort(self) -> str:
+        return self._jobs_sort
+
+    @jobsSort.setter
+    def jobsSort(self, value: str) -> None:
+        normalized = value.strip().lower()
+        if normalized not in JOB_SORT_OPTIONS or normalized == self._jobs_sort:
+            return
+        self._jobs_sort = normalized
+        self._settings.setValue("jobs/sort", normalized)
+        self._settings.sync()
+        self.refreshJobs()
+
     @Property(bool, notify=jobsChanged)
     def resumeChoiceVisible(self) -> bool:
         return self._resume_choice_visible
@@ -1046,6 +1119,10 @@ class AppBridge(QObject):
         self._screen = screen
         if screen == "jobs":
             self.refreshJobs()
+        if screen == "review":
+            self._arm_review_idle_timer()
+        else:
+            self._stop_review_idle_timer()
         self.stateChanged.emit()
 
     @Slot()
@@ -1159,6 +1236,7 @@ class AppBridge(QObject):
         retry_held: bool = False,
         profile_switch_from: JobConfig | None = None,
     ) -> None:
+        self._stop_review_idle_timer()
         self._active_config = config
         self._cancel_event.clear()
         self._busy = True
@@ -1350,6 +1428,65 @@ class AppBridge(QObject):
                 _logger.warning("작업 스레드 %s가 종료 시간 안에 끝나지 않았습니다.", worker.name)
         terminate_active_processes()
 
+    def _stop_review_idle_timer(self) -> None:
+        changed = self._review_last_activity is not None or self._review_idle_seconds != 0
+        self._review_last_activity = None
+        self._review_idle_seconds = 0
+        if changed:
+            self.reviewIdleChanged.emit()
+
+    def _arm_review_idle_timer(self) -> None:
+        if (
+            self._screen != "review"
+            or self._review_config is None
+            or self._busy
+            or self._review_busy
+            or self.reviewUnresolvedCount == 0
+            or self.reviewAcceptableCount == 0
+        ):
+            self._stop_review_idle_timer()
+            return
+        self._review_last_activity = time.monotonic()
+        self._review_idle_seconds = REVIEW_AUTO_ACCEPT_SECONDS
+        self.reviewIdleChanged.emit()
+
+    @Slot()
+    def noteReviewActivity(self) -> None:
+        """Reset the review countdown after a click, edit, selection or scroll."""
+
+        self._arm_review_idle_timer()
+
+    def _auto_accept_review_items(self) -> None:
+        config = self._review_config
+        if (
+            config is None
+            or self._screen != "review"
+            or self._busy
+            or self._review_busy
+            or self.reviewAcceptableCount == 0
+        ):
+            self._stop_review_idle_timer()
+            return
+        self._stop_review_idle_timer()
+        try:
+            accepted, skipped = accept_model_translations(config)
+        except (OSError, ValueError) as exc:
+            self._notify(f"모델 번역을 자동 채택하지 못했습니다: {exc}")
+            return
+        self.loadReviewItems()
+        if accepted:
+            self._notify(f"1분 동안 입력이 없어 모델 번역 {accepted}개를 자동 채택했습니다.")
+        if self.reviewUnresolvedCount == 0:
+            QTimer.singleShot(0, self.finishReview)
+            return
+        # Never loop over an invalid/held row every minute. A new user interaction can
+        # arm the timer again, but unresolved rows remain visible for deliberate review.
+        self._stop_review_idle_timer()
+        if skipped or not accepted:
+            self._notify(
+                f"자동 채택할 수 없는 {self.reviewUnresolvedCount}개가 남아 수동 확인이 필요합니다."
+            )
+
     @Slot()
     def loadReviewItems(self) -> None:
         config = self._review_config or self._active_config
@@ -1363,12 +1500,14 @@ class AppBridge(QObject):
                 self._review_items = []
                 self._notify(f"검토 항목을 읽을 수 없습니다: {exc}")
         self.reviewChanged.emit()
+        self._arm_review_idle_timer()
 
     @Slot(int)
     def retryReviewItem(self, raw_id: int) -> None:
         config = self._review_config
         if config is None or self._busy or self._review_busy:
             return
+        self._stop_review_idle_timer()
         self._review_busy = True
         self._cancel_event.clear()
         self.reviewChanged.emit()
@@ -1400,6 +1539,7 @@ class AppBridge(QObject):
         config = self._review_config
         if config is None or self._busy or self._review_busy:
             return False
+        self._stop_review_idle_timer()
         try:
             message = action(config)
         except (OSError, ValueError) as exc:
@@ -1472,10 +1612,12 @@ class AppBridge(QObject):
         config = self._review_config
         if config is None or self._busy or self._review_busy:
             return
+        self._stop_review_idle_timer()
         if self.reviewUnresolvedCount:
             self._notify(
                 "해결되지 않은 항목이 남아 있습니다. 다시 번역하거나 직접 입력하십시오."
             )
+            self._arm_review_idle_timer()
             return
         self._start_job(config, resume=True)
 
@@ -1503,7 +1645,10 @@ class AppBridge(QObject):
     @Slot()
     def refreshJobs(self) -> None:
         try:
-            records = self._registry.list_jobs()
+            records = self._registry.list_jobs(
+                include_completed=self._jobs_filter == "all",
+                sort_by=self._jobs_sort,
+            )
             self._jobs = [self._job_view(item) for item in records]
         except Exception as exc:
             self._jobs = []
@@ -1513,7 +1658,9 @@ class AppBridge(QObject):
     def _job_view(self, record: JobRecord) -> dict[str, Any]:
         summary = record.to_summary()
         stage = record.last_completed_stage
-        if record.completed_batches:
+        if not record.incomplete:
+            progress = "작업 완료"
+        elif record.completed_batches:
             progress = f"번역 {len(record.completed_batches)}개 배치 저장"
         elif record.completed_clips:
             progress = f"전사 {len(record.completed_clips)}개 클립 저장"
@@ -1525,7 +1672,8 @@ class AppBridge(QObject):
             "stage_title": progress,
             "stage_detail": stage,
             "elapsed_text": _format_duration(record.active_elapsed_seconds),
-            "updated_text": record.updated_at[:16].replace("T", " "),
+            "time_label": "완료" if not record.incomplete else "최근",
+            "updated_text": _format_job_time(record.updated_at),
         }
 
     @Slot(str)
@@ -1983,6 +2131,7 @@ class AppBridge(QObject):
     def newJob(self) -> None:
         if self._busy:
             return
+        self._stop_review_idle_timer()
         self._resume_choice_visible = False
         self._resume_settings_mode = False
         self._resume_original_config = None
@@ -2136,6 +2285,7 @@ class AppBridge(QObject):
             self.diagnosticsChanged.emit()
             return
 
+        self._stop_review_idle_timer()
         self._busy = False
         self._session_started = None
         self._request_started = None
@@ -2151,6 +2301,8 @@ class AppBridge(QObject):
                 self._task_title = "작업이 끝났습니다"
                 self._task_detail = "결과 파일을 저장하고 자동 검사를 마쳤습니다."
                 self._overall_progress = 1.0
+                if validation.ok:
+                    _play_completion_sound()
         else:
             message = _bounded_ui_message(error)
             self._last_error = message
@@ -2231,6 +2383,23 @@ class AppBridge(QObject):
 
     @Slot()
     def _tick(self) -> None:
+        now = time.monotonic()
+        if self._review_last_activity is not None:
+            if (
+                self._screen != "review"
+                or self._busy
+                or self._review_busy
+                or self.reviewUnresolvedCount == 0
+            ):
+                self._stop_review_idle_timer()
+            else:
+                elapsed = now - self._review_last_activity
+                remaining = max(0, REVIEW_AUTO_ACCEPT_SECONDS - int(elapsed))
+                if remaining != self._review_idle_seconds:
+                    self._review_idle_seconds = remaining
+                    self.reviewIdleChanged.emit()
+                if elapsed >= REVIEW_AUTO_ACCEPT_SECONDS:
+                    self._auto_accept_review_items()
         if self._session_started is None:
             return
         if self._request_started is not None:
